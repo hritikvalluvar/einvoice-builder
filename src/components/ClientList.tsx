@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Buyer } from '../types'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd } from '../validators'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
+import { fetchCityFromPin } from '../pincode'
 
 export function ClientList() {
   const { buyers, upsertBuyer, deleteBuyer } = useStore()
@@ -140,6 +141,18 @@ export function ClientList() {
 function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buyer) => void; onCancel: () => void }) {
   const [b, setB] = useState<Buyer>(buyer)
   const set = <K extends keyof Buyer>(k: K, v: Buyer[K]) => setB((x) => ({ ...x, [k]: v }))
+  const setPin = (raw: string) => {
+    const d = onlyDigits(raw, 6)
+    const pin = d ? Number(d) : 0
+    const stcd = pinToStcd(d)
+    setB((x) => ({ ...x, pin, ...(stcd ? { stcd, pos: stcd } : {}) }))
+    if (d.length === 6) {
+      fetchCityFromPin(d).then((city) => {
+        if (!city) return
+        setB((x) => (x.pin === pin ? { ...x, loc: city } : x))
+      })
+    }
+  }
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -158,17 +171,23 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
           <input className={inp} value={b.addr1} onChange={(e) => set('addr1', e.target.value)} />
         </Field>
         <Field label="Address line 2 (optional)"><input className={inp} value={b.addr2 ?? ''} onChange={(e) => set('addr2', e.target.value || undefined)} /></Field>
-        <Field label="Location / city" error={requireText(b.loc)}>
+        <Field label="City" error={requireText(b.loc)}>
           <input className={inp} value={b.loc} onChange={(e) => set('loc', e.target.value)} />
         </Field>
         <Field label="PIN" error={validatePin(b.pin, { required: true })}>
-          <input className={inp} type="number" inputMode="numeric" value={b.pin || ''} onChange={(e) => set('pin', Number(e.target.value))} />
+          <input
+            className={inp}
+            inputMode="numeric"
+            maxLength={6}
+            value={b.pin ? String(b.pin) : ''}
+            onChange={(e) => setPin(e.target.value)}
+          />
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="State code (Stcd)" error={validateStcd(b.stcd)}>
+          <Field label="State code (Stcd)" error={validateStcd(b.stcd)} hint={stcdName(b.stcd)}>
             <input className={inp} value={b.stcd} onChange={(e) => set('stcd', e.target.value)} />
           </Field>
-          <Field label="Place of supply (Pos)" error={validateStcd(b.pos)}>
+          <Field label="Place of supply (Pos)" error={validateStcd(b.pos)} hint={stcdName(b.pos)}>
             <input className={inp} value={b.pos} onChange={(e) => set('pos', e.target.value)} />
           </Field>
         </div>
@@ -189,12 +208,13 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
 
 const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
 
-function Field({ label, error, children }: { label: string; error?: string | null; children: React.ReactNode }) {
+function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
   return (
     <label className="block">
       <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
       {children}
       {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
+      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
     </label>
   )
 }

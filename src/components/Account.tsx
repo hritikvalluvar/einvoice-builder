@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useStore, type Member } from '../store'
 import { supabase } from '../supabase'
 import type { Seller } from '../types'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd } from '../validators'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
+import { fetchCityFromPin } from '../pincode'
 
 export function Account() {
   const { userEmail, company, seller, setSeller, listMembers, removeMember } = useStore()
@@ -13,6 +14,18 @@ export function Account() {
   const [savingMsg, setSavingMsg] = useState('')
 
   const set = <K extends keyof Seller>(k: K, v: Seller[K]) => setS((x) => ({ ...x, [k]: v }))
+  const setPin = (raw: string) => {
+    const d = onlyDigits(raw, 6)
+    const pin = d ? Number(d) : 0
+    const stcd = pinToStcd(d)
+    setS((x) => ({ ...x, pin, ...(stcd ? { stcd } : {}) }))
+    if (d.length === 6) {
+      fetchCityFromPin(d).then((city) => {
+        if (!city) return
+        setS((x) => (x.pin === pin ? { ...x, loc: city } : x))
+      })
+    }
+  }
   const myRole = members.find((m) => m.email === userEmail)?.role
   const isOwner = myRole === 'owner'
 
@@ -113,14 +126,20 @@ export function Account() {
               <input className={inp} value={s.addr1} onChange={(e) => set('addr1', e.target.value)} />
             </Field>
             <Field label="Address line 2 (optional)"><input className={inp} value={s.addr2 ?? ''} onChange={(e) => set('addr2', e.target.value || undefined)} /></Field>
-            <Field label="Location / city" error={requireText(s.loc)}>
+            <Field label="City" error={requireText(s.loc)}>
               <input className={inp} value={s.loc} onChange={(e) => set('loc', e.target.value)} />
             </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="PIN" error={validatePin(s.pin, { required: true })}>
-                <input className={inp} type="number" inputMode="numeric" value={s.pin || ''} onChange={(e) => set('pin', Number(e.target.value))} />
+                <input
+                  className={inp}
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={s.pin ? String(s.pin) : ''}
+                  onChange={(e) => setPin(e.target.value)}
+                />
               </Field>
-              <Field label="State code" error={validateStcd(s.stcd)}>
+              <Field label="State code" error={validateStcd(s.stcd)} hint={stcdName(s.stcd)}>
                 <input className={inp} value={s.stcd} onChange={(e) => set('stcd', e.target.value)} />
               </Field>
             </div>
@@ -161,12 +180,13 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   )
 }
 
-function Field({ label, error, children }: { label: string; error?: string | null; children: React.ReactNode }) {
+function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
   return (
     <label className="block">
       <span className="block text-[11px] font-medium text-slate-500 mb-0.5">{label}</span>
       {children}
       {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
+      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
     </label>
   )
 }

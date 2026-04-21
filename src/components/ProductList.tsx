@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Product } from '../types'
 import { UQC_CODES } from '../uqc'
+import { validateHsn, onlyDigits } from '../validators'
 
 export function ProductList() {
   const { products, upsertProduct, deleteProduct } = useStore()
@@ -140,6 +141,8 @@ export function ProductList() {
 function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: (p: Product) => void; onCancel: () => void }) {
   const [p, setP] = useState<Product>(product)
   const set = <K extends keyof Product>(k: K, v: Product[K]) => setP((x) => ({ ...x, [k]: v }))
+  const hsnError = validateHsn(p.hsnCd, { required: true })
+  const canSave = !!p.prdDesc.trim() && !hsnError
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -149,16 +152,15 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
       </header>
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
         <Field label="Product name"><input className={inp} value={p.prdDesc} onChange={(e) => set('prdDesc', e.target.value)} /></Field>
-        <Field label="Item description (optional)">
-          <textarea
+        <Field label="HSN code" error={hsnError}>
+          <input
             className={inp}
-            rows={2}
-            value={p.description ?? ''}
-            onChange={(e) => set('description', e.target.value || undefined)}
-            placeholder="e.g. model, spec, serial, notes"
+            inputMode="numeric"
+            maxLength={8}
+            value={p.hsnCd}
+            onChange={(e) => set('hsnCd', onlyDigits(e.target.value, 8))}
           />
         </Field>
-        <Field label="HSN code"><input className={inp} value={p.hsnCd} onChange={(e) => set('hsnCd', e.target.value)} /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Unit (UQC)">
             <select className={inp} value={p.unit} onChange={(e) => set('unit', e.target.value)}>
@@ -168,7 +170,7 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
             </select>
           </Field>
           <Field label="GST slab %">
-            <input className={inp} type="number" inputMode="decimal" value={p.gstRt} onChange={(e) => set('gstRt', Number(e.target.value))} />
+            <input className={inp} type="number" inputMode="decimal" value={p.gstRt || ''} onChange={(e) => set('gstRt', Number(e.target.value))} />
           </Field>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -185,11 +187,17 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
             </button>
           ))}
         </div>
-        <Field label="Default price"><input className={inp} type="number" inputMode="decimal" value={p.defaultPrice} onChange={(e) => set('defaultPrice', Number(e.target.value))} /></Field>
+        <Field label="Default price"><input className={inp} type="number" inputMode="decimal" value={p.defaultPrice || ''} onChange={(e) => set('defaultPrice', Number(e.target.value))} /></Field>
       </div>
       <footer className="p-3 bg-white border-t border-slate-200 flex gap-2">
         <button onClick={onCancel} className="flex-1 py-3 rounded-xl bg-slate-200 text-slate-900 font-medium">Cancel</button>
-        <button onClick={() => onSave(p)} className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium">Save</button>
+        <button
+          onClick={() => canSave && onSave(p)}
+          disabled={!canSave}
+          className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium disabled:opacity-50"
+        >
+          Save
+        </button>
       </footer>
     </div>
   )
@@ -197,11 +205,12 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
 
 const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, error, children }: { label: string; error?: string | null; children: React.ReactNode }) {
   return (
     <label className="block">
       <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
       {children}
+      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
     </label>
   )
 }

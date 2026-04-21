@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Invoice, InvoiceItem, Buyer, Product, ShipAddress, BillTo, EwbDtls } from '../types'
 import { computeLines, summarize, toNicJson, fromDateInput, toDateInput, shipFromBillTo, billFromBuyer } from '../einvoice'
 import { UQC_CODES } from '../uqc'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd } from '../validators'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, pinToStcd, stcdName, onlyDigits } from '../validators'
+import { fetchCityFromPin } from '../pincode'
+import { normGstin } from '../normalize'
 
 type Props = {
   invoiceId?: string
@@ -50,10 +52,26 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
 
   const updateBillTo = (patch: Partial<BillTo>) => {
     setBillTo((prev) => {
-      const next = { ...prev, ...patch }
+      let next = { ...prev, ...patch }
+      if (patch.pin != null && patch.stcd == null) {
+        const stcd = pinToStcd(patch.pin)
+        if (stcd) next = { ...next, stcd, pos: stcd }
+      }
       if (shipSame) setShipTo(shipFromBillTo(next))
       return next
     })
+    if (patch.pin != null && String(patch.pin).length === 6) {
+      const pin = patch.pin
+      fetchCityFromPin(pin).then((city) => {
+        if (!city) return
+        setBillTo((prev) => {
+          if (prev.pin !== pin) return prev
+          const next = { ...prev, loc: city }
+          if (shipSame) setShipTo(shipFromBillTo(next))
+          return next
+        })
+      })
+    }
   }
 
   const addItemFromProduct = (p: Product) => {
@@ -86,7 +104,8 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0
   const canSave =
     billToValid && items.length > 0 && !!docNo.trim() && !!docDt &&
-    items.every((it) => it.prdDesc.trim() && it.hsnCd.trim() && it.qty > 0)
+    items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
+
 
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
@@ -110,6 +129,28 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const exportJson = () => {
     if (!canSave) return
     const inv = buildInvoice()
+    const gstinKey = normGstin(billTo.gstin)
+    const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
+    if (!matched && gstinKey) {
+      const newBuyer: Buyer = {
+        id: newId(),
+        gstin: billTo.gstin,
+        lglNm: billTo.lglNm,
+        addr1: billTo.addr1,
+        addr2: billTo.addr2,
+        loc: billTo.loc,
+        pin: billTo.pin,
+        pos: billTo.pos,
+        stcd: billTo.stcd,
+        ph: billTo.ph,
+        em: billTo.em,
+      }
+      upsertBuyer(newBuyer)
+      inv.buyerId = newBuyer.id
+    } else if (matched && !inv.buyerId) {
+      inv.buyerId = matched.id
+    }
+
     upsertInvoice(inv)
     const payload = [toNicJson(seller, inv)]
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -131,7 +172,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
         <h1 className="text-xl font-semibold">{existing ? 'Edit Order' : 'Create Order'}</h1>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-28">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <section className="bg-white rounded-xl p-4 shadow-sm">
           <Field label="Invoice number" error={requireText(docNo)}>
             <input
@@ -156,7 +197,6 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onChange={updateBillTo}
           buyers={buyers}
           onPick={handleBuyerSelected}
-          onCreate={(b) => { upsertBuyer(b); handleBuyerSelected(b) }}
         />
 
         <ShipToSection
@@ -195,126 +235,82 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onToggle={(on) => setEwb(on ? defaultEwb(docDt) : undefined)}
           onChange={setEwb}
         />
-      </div>
 
-      <footer className="p-3 bg-white border-t border-slate-200 flex gap-2 sticky bottom-0">
-        <button
-          onClick={save}
-          disabled={!canSave}
-          className="flex-1 py-3 rounded-xl bg-slate-200 text-slate-900 font-medium disabled:opacity-50 active:scale-95 transition"
-        >
-          Save draft
-        </button>
-        <button
-          onClick={exportJson}
-          disabled={!canSave}
-          className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium disabled:opacity-50 active:scale-95 transition"
-        >
-          Export JSON
-        </button>
-      </footer>
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={save}
+            disabled={!canSave}
+            className="flex-1 py-3 rounded-xl bg-slate-200 text-slate-900 font-medium disabled:opacity-50 active:scale-95 transition"
+          >
+            Save draft
+          </button>
+          <button
+            onClick={exportJson}
+            disabled={!canSave}
+            className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium disabled:opacity-50 active:scale-95 transition"
+          >
+            Export JSON
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
 function BillToSection({
-  billTo, onChange, buyers, onPick, onCreate,
+  billTo, onChange, buyers, onPick,
 }: {
   billTo: BillTo
   onChange: (patch: Partial<BillTo>) => void
   buyers: Buyer[]
   onPick: (b: Buyer) => void
-  onCreate: (b: Buyer) => void
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [q, setQ] = useState('')
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    if (!s) return buyers
-    return buyers.filter(
-      (b) =>
-        b.lglNm.toLowerCase().includes(s) ||
-        b.gstin.toLowerCase().includes(s) ||
-        b.loc.toLowerCase().includes(s),
-    )
-  }, [buyers, q])
-
-  const saveToCatalog = () => {
-    const b: Buyer = {
-      id: newId(),
-      lglNm: billTo.lglNm,
-      gstin: billTo.gstin,
-      addr1: billTo.addr1,
-      addr2: billTo.addr2,
-      loc: billTo.loc,
-      pin: billTo.pin,
-      pos: billTo.pos,
-      stcd: billTo.stcd,
-      ph: billTo.ph,
-      em: billTo.em,
-    }
-    onCreate(b)
-  }
-
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
-      <div className="flex items-center justify-between mb-2">
-        <label className="text-xs font-medium text-slate-500">Bill to</label>
-        <button
-          onClick={() => setPickerOpen((v) => !v)}
-          className="text-xs text-slate-700 underline"
-        >
-          {pickerOpen ? 'Close' : 'Pick from saved'}
-        </button>
-      </div>
-
-      {pickerOpen && (
-        <div className="mb-3 border border-slate-200 rounded-lg p-2">
-          <input
-            placeholder="Search name, GSTIN, location"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className={inp + ' mb-2'}
-          />
-          <ul className="max-h-48 overflow-y-auto divide-y divide-slate-100">
-            {filtered.map((b) => (
-              <li key={b.id}>
-                <button
-                  onClick={() => { onPick(b); setPickerOpen(false); setQ('') }}
-                  className="w-full text-left py-2 active:bg-slate-50"
-                >
-                  <div className="font-medium text-slate-900 text-sm">{b.lglNm}</div>
-                  <div className="text-xs text-slate-500">{b.gstin} · {b.loc}</div>
-                </button>
-              </li>
-            ))}
-            {filtered.length === 0 && (
-              <li className="text-sm text-slate-500 py-3 text-center">No match.</li>
-            )}
-          </ul>
-        </div>
-      )}
+      <label className="text-xs font-medium text-slate-500 block mb-2">Bill to</label>
 
       <div className="space-y-2">
         <Field label="Legal name" error={requireText(billTo.lglNm)}>
-          <input className={inp} value={billTo.lglNm} onChange={(e) => onChange({ lglNm: e.target.value })} />
+          <ClientSuggest
+            value={billTo.lglNm}
+            onChange={(v) => onChange({ lglNm: v })}
+            buyers={buyers}
+            matchOn="lglNm"
+            onPick={onPick}
+          />
         </Field>
         <Field label="GSTIN" error={validateGstin(billTo.gstin, { required: true })}>
-          <input className={inp} value={billTo.gstin} onChange={(e) => onChange({ gstin: e.target.value.toUpperCase() })} maxLength={15} />
+          <ClientSuggest
+            value={billTo.gstin}
+            onChange={(v) => onChange({ gstin: v })}
+            buyers={buyers}
+            matchOn="gstin"
+            onPick={onPick}
+            maxLength={15}
+            transform={(v) => v.toUpperCase()}
+          />
         </Field>
         <Field label="Address" error={requireText(billTo.addr1)}>
           <input className={inp} value={billTo.addr1} onChange={(e) => onChange({ addr1: e.target.value })} />
         </Field>
         <Field label="Address line 2 (optional)"><input className={inp} value={billTo.addr2 ?? ''} onChange={(e) => onChange({ addr2: e.target.value || undefined })} /></Field>
         <div className="grid grid-cols-3 gap-2">
-          <Field label="Location" error={requireText(billTo.loc)}>
+          <Field label="City" error={requireText(billTo.loc)}>
             <input className={inp} value={billTo.loc} onChange={(e) => onChange({ loc: e.target.value })} />
           </Field>
           <Field label="PIN" error={validatePin(billTo.pin, { required: true })}>
-            <input className={inp} type="number" inputMode="numeric" value={billTo.pin || ''} onChange={(e) => onChange({ pin: Number(e.target.value) })} />
+            <input
+              className={inp}
+              inputMode="numeric"
+              maxLength={6}
+              value={billTo.pin ? String(billTo.pin) : ''}
+              onChange={(e) => {
+                const d = onlyDigits(e.target.value, 6)
+                onChange({ pin: d ? Number(d) : 0 })
+              }}
+            />
           </Field>
-          <Field label="State (Stcd)" error={validateStcd(billTo.stcd)}>
+          <Field label="State (Stcd)" error={validateStcd(billTo.stcd)} hint={stcdName(billTo.stcd)}>
             <input className={inp} value={billTo.stcd} onChange={(e) => { onChange({ stcd: e.target.value, pos: e.target.value }) }} />
           </Field>
         </div>
@@ -327,15 +323,70 @@ function BillToSection({
           </Field>
         </div>
       </div>
-
-      <button
-        onClick={saveToCatalog}
-        disabled={!billTo.lglNm.trim() || !billTo.gstin.trim()}
-        className="w-full mt-3 py-2 rounded-lg border border-dashed border-slate-300 text-slate-600 text-xs font-medium disabled:opacity-40"
-      >
-        + Save this client to catalog
-      </button>
     </section>
+  )
+}
+
+function ClientSuggest({
+  value, onChange, buyers, matchOn, onPick, maxLength, transform,
+}: {
+  value: string
+  onChange: (v: string) => void
+  buyers: Buyer[]
+  matchOn: 'lglNm' | 'gstin'
+  onPick: (b: Buyer) => void
+  maxLength?: number
+  transform?: (v: string) => string
+}) {
+  const [focused, setFocused] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  const matches = useMemo(() => {
+    const q = value.trim().toLowerCase()
+    if (!q) return []
+    return buyers
+      .filter((b) => b[matchOn].toLowerCase().includes(q))
+      .filter((b) => b[matchOn].toLowerCase() !== q)
+      .slice(0, 5)
+  }, [buyers, value, matchOn])
+
+  useEffect(() => {
+    if (!focused) return
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setFocused(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [focused])
+
+  const open = focused && matches.length > 0
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <input
+        className={inp}
+        value={value}
+        onChange={(e) => onChange(transform ? transform(e.target.value) : e.target.value)}
+        onFocus={() => setFocused(true)}
+        maxLength={maxLength}
+      />
+      {open && (
+        <ul className="absolute left-0 right-0 top-full mt-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-y-auto divide-y divide-slate-100">
+          {matches.map((b) => (
+            <li key={b.id}>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { onPick(b); setFocused(false) }}
+                className="w-full text-left px-3 py-2 active:bg-slate-50"
+              >
+                <div className="font-medium text-slate-900 text-sm">{b.lglNm}</div>
+                <div className="text-xs text-slate-500">{b.gstin} · {b.loc}</div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -348,6 +399,17 @@ function ShipToSection({
   onChange: (s: ShipAddress) => void
 }) {
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
+  const setPin = (raw: string) => {
+    const d = onlyDigits(raw, 6)
+    const pin = d ? Number(d) : 0
+    const stcd = pinToStcd(d)
+    onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })
+    if (d.length === 6) {
+      fetchCityFromPin(d).then((city) => {
+        if (city) onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}), loc: city })
+      })
+    }
+  }
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
@@ -375,13 +437,19 @@ function ShipToSection({
             <input className={inp} value={shipTo.addr1} onChange={(e) => set('addr1', e.target.value)} />
           </Field>
           <div className="grid grid-cols-3 gap-2">
-            <Field label="Location" error={requireText(shipTo.loc)}>
+            <Field label="City" error={requireText(shipTo.loc)}>
               <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
             </Field>
             <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
-              <input className={inp} type="number" inputMode="numeric" value={shipTo.pin || ''} onChange={(e) => set('pin', Number(e.target.value))} />
+              <input
+                className={inp}
+                inputMode="numeric"
+                maxLength={6}
+                value={shipTo.pin ? String(shipTo.pin) : ''}
+                onChange={(e) => setPin(e.target.value)}
+              />
             </Field>
-            <Field label="Stcd" error={validateStcd(shipTo.stcd)}>
+            <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
               <input className={inp} value={shipTo.stcd} onChange={(e) => set('stcd', e.target.value)} />
             </Field>
           </div>
@@ -397,7 +465,7 @@ function ItemsSection({
   items: InvoiceItem[]
   products: Product[]
   onAddProduct: (p: Product) => void
-  onAddBlank: () => void
+  onAddBlank: (name?: string) => void
   onCreateProduct: (p: Product) => void
   onUpdate: (idx: number, patch: Partial<InvoiceItem>) => void
   onRemove: (idx: number) => void
@@ -407,17 +475,8 @@ function ItemsSection({
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
-      <label className="text-xs font-medium text-slate-500">Items</label>
-      <div className="mt-2 space-y-2">
-        {items.map((it, idx) => (
-          <ItemRow
-            key={idx}
-            item={it}
-            total={lines[idx]?.totItemVal ?? 0}
-            onUpdate={(patch) => onUpdate(idx, patch)}
-            onRemove={() => onRemove(idx)}
-          />
-        ))}
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-medium text-slate-500">Items {items.length > 0 && `(${items.length})`}</label>
       </div>
 
       {pickerOpen ? (
@@ -428,7 +487,7 @@ function ItemsSection({
           onCancel={() => setPickerOpen(false)}
         />
       ) : (
-        <div className="mt-3 flex gap-2">
+        <div className="flex gap-2">
           <button
             onClick={() => setPickerOpen(true)}
             className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
@@ -436,25 +495,40 @@ function ItemsSection({
             + Add from products
           </button>
           <button
-            onClick={onAddBlank}
+            onClick={() => onAddBlank()}
             className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
           >
             + Blank
           </button>
         </div>
       )}
+
+      <div className="mt-3 space-y-2">
+        {items.map((it, idx) => (
+          <ItemRow
+            key={idx}
+            item={it}
+            taxable={lines[idx]?.assAmt ?? 0}
+            total={lines[idx]?.totItemVal ?? 0}
+            onUpdate={(patch) => onUpdate(idx, patch)}
+            onRemove={() => onRemove(idx)}
+          />
+        ))}
+      </div>
     </section>
   )
 }
 
 function ItemRow({
-  item, total, onUpdate, onRemove,
+  item, taxable, total, onUpdate, onRemove,
 }: {
   item: InvoiceItem
+  taxable: number
   total: number
   onUpdate: (patch: Partial<InvoiceItem>) => void
   onRemove: () => void
 }) {
+  const hsnError = validateHsn(item.hsnCd, { required: true })
   return (
     <div className="border border-slate-200 rounded-lg p-2">
       <div className="flex items-center gap-2">
@@ -462,7 +536,7 @@ function ItemRow({
           value={item.prdDesc}
           onChange={(e) => onUpdate({ prdDesc: e.target.value })}
           placeholder="Item name"
-          className="flex-1 font-medium text-sm border-0 bg-transparent focus:outline-none focus:ring-0 p-1 min-w-0"
+          className="flex-1 font-medium text-sm border border-slate-200 bg-white rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-slate-400 min-w-0"
         />
         <button onClick={onRemove} className="text-slate-400 px-2 text-lg">×</button>
       </div>
@@ -470,26 +544,49 @@ function ItemRow({
         value={item.description ?? ''}
         onChange={(e) => onUpdate({ description: e.target.value || undefined })}
         placeholder="Description (optional)"
-        rows={1}
-        className="w-full text-xs text-slate-600 italic border-0 bg-transparent focus:outline-none focus:ring-0 p-1 resize-none min-w-0"
+        rows={2}
+        className="w-full text-xs text-slate-600 italic border border-slate-200 rounded px-2 py-1 mt-1 focus:outline-none focus:ring-1 focus:ring-slate-400 resize-y min-w-0"
       />
       <div className="grid grid-cols-2 gap-2 mt-1">
         <Mini label="Qty">
-          <input type="number" inputMode="decimal" step="any" value={item.qty}
-            onChange={(e) => onUpdate({ qty: Number(e.target.value) })} className={miniInp} />
+          <input
+            type="number"
+            inputMode="decimal"
+            step="any"
+            value={item.qty || ''}
+            onChange={(e) => onUpdate({ qty: Number(e.target.value) })}
+            className={`${miniInp} ${item.qty > 0 ? '' : 'border-red-400'}`}
+          />
         </Mini>
         <Mini label="Unit price">
-          <input type="number" inputMode="decimal" step="any" value={item.unitPrice}
-            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value) })} className={miniInp} />
+          <input
+            type="number"
+            inputMode="decimal"
+            step="any"
+            value={item.unitPrice || ''}
+            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value) })}
+            className={`${miniInp} ${item.unitPrice > 0 ? '' : 'border-red-400'}`}
+          />
         </Mini>
       </div>
       <div className="grid grid-cols-3 gap-2 mt-1">
         <Mini label="HSN">
-          <input value={item.hsnCd} onChange={(e) => onUpdate({ hsnCd: e.target.value })} className={miniInp} />
+          <input
+            inputMode="numeric"
+            maxLength={8}
+            value={item.hsnCd}
+            onChange={(e) => onUpdate({ hsnCd: onlyDigits(e.target.value, 8) })}
+            className={`${miniInp} ${hsnError ? 'border-red-400' : ''}`}
+          />
         </Mini>
         <Mini label="GST %">
-          <input type="number" inputMode="decimal" value={item.gstRt}
-            onChange={(e) => onUpdate({ gstRt: Number(e.target.value) })} className={miniInp} />
+          <input
+            type="number"
+            inputMode="decimal"
+            value={item.gstRt || ''}
+            onChange={(e) => onUpdate({ gstRt: Number(e.target.value) })}
+            className={miniInp}
+          />
         </Mini>
         <Mini label="Unit">
           <select value={item.unit} onChange={(e) => onUpdate({ unit: e.target.value })} className={miniInp}>
@@ -499,7 +596,34 @@ function ItemRow({
           </select>
         </Mini>
       </div>
-      <div className="text-xs text-slate-500 mt-1.5 text-right">Line ₹{total.toFixed(2)}</div>
+      {hsnError && (
+        <div className="text-[11px] text-red-600 mt-0.5">HSN: {hsnError}</div>
+      )}
+      {!(item.qty > 0) && (
+        <div className="text-[11px] text-red-600 mt-0.5">Qty: Required</div>
+      )}
+      {!(item.unitPrice > 0) && (
+        <div className="text-[11px] text-red-600 mt-0.5">Unit price: Required</div>
+      )}
+      <div className="flex items-center justify-end gap-3 mt-1.5 text-xs text-slate-600">
+        <label className="flex items-center gap-1">
+          <span>Taxable ₹</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="any"
+            value={Number.isFinite(taxable) ? taxable : 0}
+            onChange={(e) => {
+              const newTaxable = Number(e.target.value)
+              if (!(item.qty > 0)) return
+              const gross = item.qty * item.unitPrice
+              onUpdate({ discount: Math.round((gross - newTaxable) * 100) / 100 })
+            }}
+            className="w-24 border border-slate-200 rounded px-2 py-0.5 text-right"
+          />
+        </label>
+        <span className="text-slate-900 font-medium">Total ₹{total.toFixed(2)}</span>
+      </div>
     </div>
   )
 }
@@ -532,7 +656,7 @@ function ProductPicker({
   }
 
   return (
-    <div className="mt-3 border-t border-slate-100 pt-3">
+    <div>
       <div className="flex gap-2 mb-2">
         <input
           placeholder="Search or type new"
@@ -573,22 +697,22 @@ function QuickProductForm({
     id: newId(), prdDesc: initial, hsnCd: '', unit: 'PCS', defaultPrice: 0, gstRt: 18,
   })
   const set = <K extends keyof Product>(k: K, v: Product[K]) => setP((x) => ({ ...x, [k]: v }))
-  const valid = p.prdDesc.trim() && p.hsnCd.trim() && p.defaultPrice > 0
+  const hsnError = validateHsn(p.hsnCd, { required: true })
+  const valid = p.prdDesc.trim() && !hsnError && p.defaultPrice > 0
 
   return (
-    <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+    <div className="space-y-2">
       <Field label="Product name"><input className={inp} value={p.prdDesc} onChange={(e) => set('prdDesc', e.target.value)} /></Field>
-      <Field label="Description (optional)">
-        <textarea
-          className={inp}
-          rows={2}
-          value={p.description ?? ''}
-          onChange={(e) => set('description', e.target.value || undefined)}
-          placeholder="e.g. model, spec, serial"
-        />
-      </Field>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="HSN code"><input className={inp} value={p.hsnCd} onChange={(e) => set('hsnCd', e.target.value)} /></Field>
+        <Field label="HSN code" error={hsnError}>
+          <input
+            className={inp}
+            inputMode="numeric"
+            maxLength={8}
+            value={p.hsnCd}
+            onChange={(e) => set('hsnCd', onlyDigits(e.target.value, 8))}
+          />
+        </Field>
         <Field label="Default price"><input className={inp} type="number" inputMode="decimal" value={p.defaultPrice || ''} onChange={(e) => set('defaultPrice', Number(e.target.value))} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -599,7 +723,7 @@ function QuickProductForm({
             ))}
           </select>
         </Field>
-        <Field label="GST %"><input className={inp} type="number" inputMode="decimal" value={p.gstRt} onChange={(e) => set('gstRt', Number(e.target.value))} /></Field>
+        <Field label="GST %"><input className={inp} type="number" inputMode="decimal" value={p.gstRt || ''} onChange={(e) => set('gstRt', Number(e.target.value))} /></Field>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {[0, 5, 12, 18, 28].map((slab) => (
@@ -791,12 +915,13 @@ function EwbSection({
 const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
 const miniInp = 'w-full border border-slate-200 rounded px-2 py-1 text-sm'
 
-function Field({ label, error, children }: { label: string; error?: string | null; children: React.ReactNode }) {
+function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
   return (
     <label className="block">
       <span className="block text-[11px] font-medium text-slate-500 mb-0.5">{label}</span>
       {children}
       {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
+      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
     </label>
   )
 }
