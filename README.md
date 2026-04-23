@@ -1,5 +1,7 @@
 # Bill Builder
 
+[![CI](https://github.com/hritikvalluvar/einvoice-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/hritikvalluvar/einvoice-builder/actions/workflows/ci.yml)
+
 A minimal, mobile-first **GST e-invoice builder** for Indian SMEs. Lets a shopkeeper (or their counter staff) create invoices on a phone, pick from saved clients and products, and export [NIC-schema-compliant JSON](https://einvoice1.gst.gov.in/) ready for upload to the government's e-invoice portal.
 
 Built over a weekend after research into a real problem: small B2B businesses in the ₹5–500 Cr turnover band are forced to use NIC's GePP portal (clunky Excel-style web tool) because direct API access is only granted to ≥₹500 Cr taxpayers, and routing through a GSP costs per-invoice. This app gives them a better UX to produce the same upload-ready JSON.
