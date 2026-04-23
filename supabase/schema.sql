@@ -16,6 +16,7 @@ drop table if exists buyers cascade;
 drop table if exists sellers cascade;
 drop table if exists memberships cascade;
 drop table if exists companies cascade;
+drop table if exists gstin_cache cascade;
 
 -- ============ TABLES ============
 
@@ -103,6 +104,14 @@ create table invoices (
 
 create index invoices_company_idx on invoices(company_id);
 
+-- GSTIN lookup cache (shared across companies — registry data is public).
+-- Rows written by the `lookup-gstin` edge function via service role.
+create table gstin_cache (
+  gstin       text primary key,
+  data        jsonb not null,
+  fetched_at  timestamptz not null default now()
+);
+
 -- ============ HELPERS ============
 
 create or replace function is_member(co uuid)
@@ -125,6 +134,7 @@ alter table sellers       enable row level security;
 alter table buyers        enable row level security;
 alter table products      enable row level security;
 alter table invoices      enable row level security;
+alter table gstin_cache   enable row level security;
 
 create policy "companies_read"      on companies    for select using (is_member(id));
 create policy "companies_update"    on companies    for update using (is_owner(id));
@@ -136,6 +146,9 @@ create policy "sellers_co"          on sellers      for all using (is_member(com
 create policy "buyers_co"           on buyers       for all using (is_member(company_id)) with check (is_member(company_id));
 create policy "products_co"         on products     for all using (is_member(company_id)) with check (is_member(company_id));
 create policy "invoices_co"         on invoices     for all using (is_member(company_id)) with check (is_member(company_id));
+
+-- gstin_cache: any signed-in user can read; writes happen only via service role (edge function)
+create policy "gstin_cache_read"    on gstin_cache  for select using (auth.uid() is not null);
 
 -- ============ RPCs ============
 

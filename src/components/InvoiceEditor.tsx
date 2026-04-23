@@ -6,6 +6,7 @@ import { UQC_CODES } from '../uqc'
 import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, pinToStcd, stcdName, onlyDigits } from '../validators'
 import { fetchCityFromPin } from '../pincode'
 import { normGstin } from '../normalize'
+import { lookupGstin } from '../gstinLookup'
 
 type Props = {
   invoiceId?: string
@@ -37,6 +38,37 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     existing?.shipTo ?? { gstin: 'URP', lglNm: '', addr1: '', loc: '', pin: 0, stcd: '09' },
   )
   const [ewb, setEwb] = useState<EwbDtls | undefined>(existing?.ewb)
+  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
+    { loading: false, error: null, cached: false },
+  )
+
+  const fetchGstinDetails = async () => {
+    const g = billTo.gstin.trim().toUpperCase()
+    if (validateGstin(g, { required: true }) !== null) return
+    setGstinFetch({ loading: true, error: null, cached: false })
+    const r = await lookupGstin(g)
+    if (!r.ok) {
+      setGstinFetch({ loading: false, error: r.error, cached: false })
+      return
+    }
+    setGstinFetch({ loading: false, error: null, cached: r.cached })
+    const d = r.data
+    const next: BillTo = {
+      gstin: g,
+      lglNm: d.lglNm || billTo.lglNm,
+      addr1: d.addr1 || billTo.addr1,
+      addr2: d.addr2 ?? billTo.addr2,
+      loc: d.loc || billTo.loc,
+      pin: d.pin || billTo.pin,
+      stcd: d.stcd || billTo.stcd,
+      pos: d.pos || d.stcd || billTo.pos,
+      ph: billTo.ph,
+      em: billTo.em,
+    }
+    setBillTo(next)
+    setBuyerId(undefined)
+    if (shipSame) setShipTo(shipFromBillTo(next))
+  }
 
   const isIntra = seller.stcd === billTo.pos
   const lines = useMemo(() => computeLines(items, isIntra), [items, isIntra])
@@ -51,6 +83,9 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   }
 
   const updateBillTo = (patch: Partial<BillTo>) => {
+    if (patch.gstin != null && gstinFetch.error) {
+      setGstinFetch({ loading: false, error: null, cached: false })
+    }
     setBillTo((prev) => {
       let next = { ...prev, ...patch }
       if (patch.pin != null && patch.stcd == null) {
@@ -197,6 +232,8 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onChange={updateBillTo}
           buyers={buyers}
           onPick={handleBuyerSelected}
+          onFetchGstin={fetchGstinDetails}
+          fetchState={gstinFetch}
         />
 
         <ShipToSection
@@ -258,13 +295,21 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
 }
 
 function BillToSection({
-  billTo, onChange, buyers, onPick,
+  billTo, onChange, buyers, onPick, onFetchGstin, fetchState,
 }: {
   billTo: BillTo
   onChange: (patch: Partial<BillTo>) => void
   buyers: Buyer[]
   onPick: (b: Buyer) => void
+  onFetchGstin: () => void
+  fetchState: { loading: boolean; error: string | null; cached: boolean }
 }) {
+  const gstinFormatOk = validateGstin(billTo.gstin, { required: true }) === null
+  const fetchHint = fetchState.loading
+    ? 'Looking up…'
+    : fetchState.cached
+      ? 'Auto-filled (cached)'
+      : null
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="text-xs font-medium text-slate-500 block mb-2">Bill to</label>
@@ -279,23 +324,35 @@ function BillToSection({
             onPick={onPick}
           />
         </Field>
-        <Field label="GSTIN" error={validateGstin(billTo.gstin, { required: true })}>
-          <ClientSuggest
-            value={billTo.gstin}
-            onChange={(v) => onChange({ gstin: v })}
-            buyers={buyers}
-            matchOn="gstin"
-            onPick={onPick}
-            maxLength={15}
-            transform={(v) => v.toUpperCase()}
-          />
+        <Field label="GSTIN" error={fetchState.error ?? validateGstin(billTo.gstin, { required: true })} hint={fetchHint}>
+          <div className="flex gap-2">
+            <div className="flex-1 min-w-0">
+              <ClientSuggest
+                value={billTo.gstin}
+                onChange={(v) => onChange({ gstin: v })}
+                buyers={buyers}
+                matchOn="gstin"
+                onPick={onPick}
+                maxLength={15}
+                transform={(v) => v.toUpperCase()}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={onFetchGstin}
+              disabled={!gstinFormatOk || fetchState.loading}
+              className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
+            >
+              {fetchState.loading ? '…' : 'Fetch'}
+            </button>
+          </div>
         </Field>
         <Field label="Address" error={requireText(billTo.addr1)}>
           <input className={inp} value={billTo.addr1} onChange={(e) => onChange({ addr1: e.target.value })} />
         </Field>
         <Field label="Address line 2 (optional)"><input className={inp} value={billTo.addr2 ?? ''} onChange={(e) => onChange({ addr2: e.target.value || undefined })} /></Field>
         <div className="grid grid-cols-3 gap-2">
-          <Field label="City" error={requireText(billTo.loc)}>
+          <Field label="Location" error={requireText(billTo.loc)}>
             <input className={inp} value={billTo.loc} onChange={(e) => onChange({ loc: e.target.value })} />
           </Field>
           <Field label="PIN" error={validatePin(billTo.pin, { required: true })}>
@@ -437,7 +494,7 @@ function ShipToSection({
             <input className={inp} value={shipTo.addr1} onChange={(e) => set('addr1', e.target.value)} />
           </Field>
           <div className="grid grid-cols-3 gap-2">
-            <Field label="City" error={requireText(shipTo.loc)}>
+            <Field label="Location" error={requireText(shipTo.loc)}>
               <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
             </Field>
             <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>

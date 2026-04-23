@@ -126,7 +126,7 @@ export function Account() {
               <input className={inp} value={s.addr1} onChange={(e) => set('addr1', e.target.value)} />
             </Field>
             <Field label="Address line 2 (optional)"><input className={inp} value={s.addr2 ?? ''} onChange={(e) => set('addr2', e.target.value || undefined)} /></Field>
-            <Field label="City" error={requireText(s.loc)}>
+            <Field label="Location" error={requireText(s.loc)}>
               <input className={inp} value={s.loc} onChange={(e) => set('loc', e.target.value)} />
             </Field>
             <div className="grid grid-cols-2 gap-2">

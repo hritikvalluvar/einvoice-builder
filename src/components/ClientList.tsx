@@ -171,7 +171,7 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
           <input className={inp} value={b.addr1} onChange={(e) => set('addr1', e.target.value)} />
         </Field>
         <Field label="Address line 2 (optional)"><input className={inp} value={b.addr2 ?? ''} onChange={(e) => set('addr2', e.target.value || undefined)} /></Field>
-        <Field label="City" error={requireText(b.loc)}>
+        <Field label="Location" error={requireText(b.loc)}>
           <input className={inp} value={b.loc} onChange={(e) => set('loc', e.target.value)} />
         </Field>
         <Field label="PIN" error={validatePin(b.pin, { required: true })}>
