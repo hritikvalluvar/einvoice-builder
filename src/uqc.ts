@@ -1,7 +1,7 @@
 // Standard GST UQC (Unit Quantity Codes) — 44 codes
 // Ref: https://cleartax.in/s/gst-unit-quantity-code-uqc
 
-export type Uqc = { code: string; label: string }
+type Uqc = { code: string; label: string }
 
 export const UQC_CODES: Uqc[] = [
   { code: 'BAG', label: 'Bags' },

@@ -5,13 +5,13 @@
 import { supabase } from './supabase'
 import type { BillTo } from './types'
 
-export type LookupOk = {
+type LookupOk = {
   ok: true
   cached: boolean
   data: Partial<BillTo> & { tradeNam?: string | null; status?: string | null }
 }
-export type LookupErr = { ok: false; error: string }
-export type GstinLookupResult = LookupOk | LookupErr
+type LookupErr = { ok: false; error: string }
+type GstinLookupResult = LookupOk | LookupErr
 
 const mem = new Map<string, GstinLookupResult>()
 

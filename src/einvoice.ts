@@ -70,7 +70,7 @@ export function computeLines(items: InvoiceItem[], isIntra: boolean): ComputedLi
   })
 }
 
-export type InvoiceSummary = {
+type InvoiceSummary = {
   assVal: number
   cgstVal: number
   sgstVal: number

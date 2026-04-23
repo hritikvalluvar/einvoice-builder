@@ -808,7 +808,6 @@ function SummarySection({
   forceTotalStr: string
   setForceTotalStr: (s: string) => void
 }) {
-  const forceTotal = forceTotalStr.trim() ? Number(forceTotalStr) : undefined
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="text-xs font-medium text-slate-500">Summary</label>

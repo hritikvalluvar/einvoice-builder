@@ -84,7 +84,7 @@ const PIN2_DEFAULT: Record<number, string> = {
   80: '10', 81: '10', 82: '10', 83: '10', 84: '10', 85: '10', // Bihar (Jharkhand handled in 3-digit overrides)
 }
 
-export const STATE_NAMES: Record<string, string> = {
+const STATE_NAMES: Record<string, string> = {
   '01': 'Jammu & Kashmir',
   '02': 'Himachal Pradesh',
   '03': 'Punjab',
