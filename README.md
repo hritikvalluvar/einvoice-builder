@@ -102,3 +102,11 @@ supabase/
 ## License
 
 MIT.
+
+
+## Roadmap
+
+- GSTIN Fetch (shipped) — auto-fill bill-to from the GST registry
+- Invoice PDF — mobile-friendly tax invoice generation
+- IRN generation — via Sandbox / IRIS / any GSP (pluggable)
+- E-way bill integration
