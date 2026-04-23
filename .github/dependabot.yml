@@ -1,7 +1,11 @@
 version: 2
 
+# Non-security version PRs skip major bumps entirely — majors need manual
+# upgrade paths for frameworks like React/Vite/TS. Security updates (CVEs)
+# are handled by a separate Dependabot mechanism and still open PRs regardless.
+
 updates:
-  # npm deps — one grouped PR per week for minor/patch, separate PRs for majors.
+  # npm deps — one grouped PR per week for minor/patch only.
   - package-ecosystem: npm
     directory: "/"
     schedule:
@@ -15,8 +19,12 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
 
-  # GitHub Actions — keep runners/actions current.
+  # GitHub Actions — keep runners/actions current, minor/patch only.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -26,3 +34,7 @@ updates:
     labels:
       - dependencies
       - ci
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
