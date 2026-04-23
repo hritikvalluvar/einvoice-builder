@@ -240,9 +240,10 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           shipSame={shipSame}
           shipTo={shipTo}
           onToggleSame={(same) => {
-            setShipSame(same)
-            if (same) setShipTo(shipFromBillTo(billTo))
-          }}
+  setShipSame(same)
+  if (same) setShipTo(shipFromBillTo(billTo))
+  else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+}}
           onChange={setShipTo}
         />
 
@@ -456,17 +457,39 @@ function ShipToSection({
   onChange: (s: ShipAddress) => void
 }) {
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (city) onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}), loc: city })
-      })
+  const setPin = (raw: string) => {}
+
+  // ── NEW: fetch state lives here ──
+  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
+    { loading: false, error: null, cached: false },
+  )
+
+  const gstinFormatOk = validateGstin(shipTo.gstin, { required: true }) === null  // URP fails → button disabled ✓
+
+  const fetchGstinDetails = async () => {
+    const g = shipTo.gstin.trim().toUpperCase()
+    if (validateGstin(g, { required: true }) !== null) return          // guard: URP / invalid → no-op
+    setGstinFetch({ loading: true, error: null, cached: false })
+    const r = await lookupGstin(g)
+    if (!r.ok) {
+      setGstinFetch({ loading: false, error: r.error, cached: false })
+      return
     }
+    setGstinFetch({ loading: false, error: null, cached: r.cached })
+    const d = r.data
+    onChange({
+  ...shipTo,
+  gstin: g,
+  lglNm: d.lglNm || shipTo.lglNm,
+  addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),  // ← concatenate here
+  addr2: undefined,                                       // ← flatten, no separate addr2
+  loc:   d.loc  || shipTo.loc,
+  pin:   d.pin  || shipTo.pin,
+  stcd:  d.stcd || shipTo.stcd,
+})
   }
+
+  const fetchHint = gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
@@ -481,37 +504,73 @@ function ShipToSection({
         <span className="text-sm text-slate-700">Same as bill to</span>
       </label>
       {!shipSame && (
-        <div className="space-y-2 mt-2">
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="GSTIN (or URP)" error={validateGstin(shipTo.gstin, { required: true, allowURP: true })}>
-              <input className={inp} value={shipTo.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
-            </Field>
-            <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
-              <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
-            </Field>
-          </div>
-          <Field label="Address" error={requireText(shipTo.addr1)}>
-            <input className={inp} value={shipTo.addr1} onChange={(e) => set('addr1', e.target.value)} />
-          </Field>
-          <div className="grid grid-cols-3 gap-2">
-            <Field label="Location" error={requireText(shipTo.loc)}>
-              <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
-            </Field>
-            <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
-              <input
-                className={inp}
-                inputMode="numeric"
-                maxLength={6}
-                value={shipTo.pin ? String(shipTo.pin) : ''}
-                onChange={(e) => setPin(e.target.value)}
-              />
-            </Field>
-            <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
-              <input className={inp} value={shipTo.stcd} onChange={(e) => set('stcd', e.target.value)} />
-            </Field>
-          </div>
+  <div className="space-y-2 mt-2">
+    {/* GSTIN full-width with Fetch button */}
+    <Field
+      label="GSTIN (or URP)"
+      error={gstinFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
+      hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
+    >
+      <div className="flex gap-2">
+        <div className="flex-1 min-w-0">
+          <input
+            className={inp}
+            value={shipTo.gstin}
+            onChange={(e) => {
+              if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
+              set('gstin', e.target.value.toUpperCase())
+            }}
+            maxLength={15}
+          />
         </div>
-      )}
+        <button
+          type="button"
+          onClick={fetchGstinDetails}
+          disabled={!gstinFormatOk || gstinFetch.loading}
+          className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
+        >
+          {gstinFetch.loading ? '…' : 'Fetch'}
+        </button>
+      </div>
+    </Field>
+    <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
+      <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
+    </Field>
+
+    {/* Merged address: addr1 + addr2 concatenated, single input */}
+    <Field label="Address" error={requireText(shipTo.addr1)}>
+      <input
+        className={inp}
+        value={[shipTo.addr1, shipTo.addr2].filter(Boolean).join(' ')}
+        onChange={(e) => {
+          // Split at first comma or just put everything in addr1
+          const val = e.target.value
+          set('addr1', val)
+          // clear addr2 since we're merging into one field
+          onChange({ ...shipTo, addr1: val, addr2: undefined })
+        }}
+        placeholder="Address line 1 and 2"
+      />
+    </Field>
+    <div className="grid grid-cols-3 gap-2">
+      <Field label="Location" error={requireText(shipTo.loc)}>
+        <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
+      </Field>
+      <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
+        <input
+          className={inp}
+          inputMode="numeric"
+          maxLength={6}
+          value={shipTo.pin ? String(shipTo.pin) : ''}
+          onChange={(e) => setPin(e.target.value)}
+        />
+      </Field>
+      <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
+        <input className={inp} value={shipTo.stcd} onChange={(e) => set('stcd', e.target.value)} />
+      </Field>
+    </div>
+  </div>
+)}
     </section>
   )
 }
