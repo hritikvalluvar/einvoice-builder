@@ -42,6 +42,11 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     { loading: false, error: null, cached: false },
   )
 
+  // ── Snapshot tracking if user changes GST details after fetching ──
+  const [billToSnapshot, setBillToSnapshot] = useState<Partial<BillTo> | null>(null)
+  const [shipToSnapshot, setShipToSnapshot] = useState<Partial<ShipAddress> | null>(null)
+  const [pendingAction, setPendingAction] = useState<'save' | 'export' | null>(null)
+
   const fetchGstinDetails = async () => {
     const g = billTo.gstin.trim().toUpperCase()
     if (validateGstin(g, { required: true }) !== null) return
@@ -68,6 +73,16 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setBillTo(next)
     setBuyerId(undefined)
     if (shipSame) setShipTo(shipFromBillTo(next))
+
+    // ── record snapshot of what was auto-filled ──
+    setBillToSnapshot({
+      lglNm: next.lglNm,
+      addr1: next.addr1,
+      addr2: next.addr2,
+      loc: next.loc,
+      pin: next.pin,
+      stcd: next.stcd,
+    })
   }
 
   const isIntra = seller.stcd === billTo.pos
@@ -80,6 +95,15 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     const bill = billFromBuyer(b)
     setBillTo(bill)
     if (shipSame) setShipTo(shipFromBillTo(bill))
+    // ── record snapshot so edits after picking trigger the dialog ──
+    setBillToSnapshot({
+      lglNm: bill.lglNm,
+      addr1: bill.addr1,
+      addr2: bill.addr2,
+      loc: bill.loc,
+      pin: bill.pin,
+      stcd: bill.stcd,
+    })
   }
 
   const updateBillTo = (patch: Partial<BillTo>) => {
@@ -137,10 +161,26 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const removeItem = (idx: number) => setItems((arr) => arr.filter((_, i) => i !== idx))
 
   const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0
+  // EWB is optional, but if provided, it must be valid
+  const ewbValid = !ewb || (
+    (!!ewb.vehNo?.trim() || !!ewb.transId?.trim()) &&
+    (!ewb.transId?.trim() || !!ewb.transName?.trim()) &&
+    (!ewb.transId?.trim() || ewb.transId.trim().length === 15)
+  )
+
   const canSave =
-    billToValid && items.length > 0 && !!docNo.trim() && !!docDt &&
+    billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
     items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
 
+  // ── detect if user edited auto-filled fields after fetch ──
+  const snapshotKeys: (keyof BillTo)[] = ['lglNm', 'addr1', 'addr2', 'loc', 'pin', 'stcd']
+  const billToChanged = billToSnapshot !== null && snapshotKeys.some(
+    (k) => String(billTo[k] ?? '') !== String(billToSnapshot[k] ?? '')
+  )
+  const shipToChanged = shipToSnapshot !== null && snapshotKeys.some(
+    (k) => String((shipTo as any)[k] ?? '') !== String((shipToSnapshot as any)[k] ?? '')
+  )
+  const hasFetchChanges = billToChanged || shipToChanged
 
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
@@ -155,14 +195,9 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     createdAt: existing?.createdAt ?? Date.now(),
   })
 
-  const save = () => {
-    if (!canSave) return
-    upsertInvoice(buildInvoice())
-    onDone()
-  }
-
-  const exportJson = () => {
-    if (!canSave) return
+  // ── split actual save/export logic out so dialog can call them ──
+  const doSave = () => {
+    // on save, if GSTIN doesn't match any existing buyer, create a new buyer record so it shows up in suggestions later
     const inv = buildInvoice()
     const gstinKey = normGstin(billTo.gstin)
     const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
@@ -185,7 +220,33 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     } else if (matched && !inv.buyerId) {
       inv.buyerId = matched.id
     }
+    upsertInvoice(inv)
+    onDone()
+  }
 
+  const doExport = () => {
+    const inv = buildInvoice()
+    const gstinKey = normGstin(billTo.gstin)
+    const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
+    if (!matched && gstinKey) {
+      const newBuyer: Buyer = {
+        id: newId(),
+        gstin: billTo.gstin,
+        lglNm: billTo.lglNm,
+        addr1: billTo.addr1,
+        addr2: billTo.addr2,
+        loc: billTo.loc,
+        pin: billTo.pin,
+        pos: billTo.pos,
+        stcd: billTo.stcd,
+        ph: billTo.ph,
+        em: billTo.em,
+      }
+      upsertBuyer(newBuyer)
+      inv.buyerId = newBuyer.id
+    } else if (matched && !inv.buyerId) {
+      inv.buyerId = matched.id
+    }
     upsertInvoice(inv)
     const payload = [toNicJson(seller, inv)]
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -196,6 +257,19 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
     onDone()
+  }
+
+  // ── save/export now gate through dialog if needed ──
+  const save = () => {
+    if (!canSave) return
+    if (hasFetchChanges) { setPendingAction('save'); return }
+    doSave()
+  }
+
+  const exportJson = () => {
+    if (!canSave) return
+    if (hasFetchChanges) { setPendingAction('export'); return }
+    doExport()
   }
 
   return (
@@ -242,8 +316,32 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onToggleSame={(same) => {
             setShipSame(same)
             if (same) setShipTo(shipFromBillTo(billTo))
+            else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
           }}
           onChange={setShipTo}
+          onFetchSuccess={(fetched) => setShipToSnapshot(fetched)}
+          buyers={buyers}
+          onPick={(b) => {
+            const s: ShipAddress = {
+              gstin: b.gstin,
+              lglNm: b.lglNm,
+              addr1: b.addr1,
+              addr2: b.addr2,
+              loc: b.loc,
+              pin: b.pin,
+              stcd: b.stcd,
+            }
+            setShipTo(s)
+            // ── record snapshot so edits after picking trigger the dialog ──
+            setShipToSnapshot({
+              lglNm: b.lglNm,
+              addr1: b.addr1,
+              addr2: b.addr2,
+              loc: b.loc,
+              pin: b.pin,
+              stcd: b.stcd,
+            })
+          }}
         />
 
         <ItemsSection
@@ -290,6 +388,40 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           </button>
         </div>
       </div>
+      {/* ── confirmation dialog ── */}
+      {pendingAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-3">
+            <h2 className="text-base font-semibold text-slate-900">Details changed after fetch</h2>
+            <p className="text-sm text-slate-600">
+              Auto-filled details
+              {billToChanged && shipToChanged
+                ? ' in Bill To and Ship To'
+                : billToChanged ? ' in Bill To' : ' in Ship To'}
+              {' '}were manually edited after fetching from GSTIN. They may no longer match the registered details.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setPendingAction(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Rectify
+              </button>
+              <button
+                onClick={() => {
+                  const action = pendingAction
+                  setPendingAction(null)
+                  if (action === 'save') doSave()
+                  else doExport()
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
+              >
+                Proceed anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -448,12 +580,15 @@ function ClientSuggest({
 }
 
 function ShipToSection({
-  shipSame, shipTo, onToggleSame, onChange,
+  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess, buyers, onPick,
 }: {
   shipSame: boolean
   shipTo: ShipAddress
   onToggleSame: (same: boolean) => void
   onChange: (s: ShipAddress) => void
+  onFetchSuccess: (fetched: Partial<ShipAddress>) => void
+  buyers: Buyer[]
+  onPick: (b: Buyer) => void
 }) {
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
   const setPin = (raw: string) => {
@@ -466,6 +601,45 @@ function ShipToSection({
         if (city) onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}), loc: city })
       })
     }
+  }
+
+  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
+    { loading: false, error: null, cached: false },
+  )
+
+  const gstinFormatOk = validateGstin(shipTo.gstin, { required: true }) === null  // URP fails → button disabled ✓
+
+  const fetchGstinDetails = async () => {
+    const g = shipTo.gstin.trim().toUpperCase()
+    if (validateGstin(g, { required: true }) !== null) return          // guard: URP / invalid → no-op
+    setGstinFetch({ loading: true, error: null, cached: false })
+    const r = await lookupGstin(g)
+    if (!r.ok) {
+      setGstinFetch({ loading: false, error: r.error, cached: false })
+      return
+    }
+    setGstinFetch({ loading: false, error: null, cached: r.cached })
+    const d = r.data
+    onChange({
+      ...shipTo,
+      gstin: g,
+      lglNm: d.lglNm || shipTo.lglNm,
+      addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),  // ← concatenate here
+      addr2: undefined,                                       // ← flatten, no separate addr2
+      loc: d.loc || shipTo.loc,
+      pin: d.pin || shipTo.pin,
+      stcd: d.stcd || shipTo.stcd,
+    })
+    const merged = {
+      lglNm: d.lglNm || shipTo.lglNm,
+      addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),
+      addr2: undefined,
+      loc: d.loc || shipTo.loc,
+      pin: d.pin || shipTo.pin,
+      stcd: d.stcd || shipTo.stcd,
+    }
+    onChange({ ...shipTo, gstin: g, ...merged })
+    onFetchSuccess(merged)
   }
 
   return (
@@ -482,16 +656,61 @@ function ShipToSection({
       </label>
       {!shipSame && (
         <div className="space-y-2 mt-2">
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="GSTIN (or URP)" error={validateGstin(shipTo.gstin, { required: true, allowURP: true })}>
-              <input className={inp} value={shipTo.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
-            </Field>
-            <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
-              <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
-            </Field>
-          </div>
+          {/* GSTIN full-width with Fetch button */}
+          <Field
+            label="GSTIN (or URP)"
+            error={gstinFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
+            hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
+          >
+            <div className="flex gap-2">
+              <div className="flex-1 min-w-0">
+                <ClientSuggest
+                  value={shipTo.gstin}
+                  onChange={(v) => {
+                    if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
+                    set('gstin', v.toUpperCase())
+                  }}
+                  buyers={buyers}
+                  matchOn="gstin"
+                  onPick={onPick}
+                  maxLength={15}
+                  transform={(v) => v.toUpperCase()}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={fetchGstinDetails}
+                disabled={!gstinFormatOk || gstinFetch.loading}
+                className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
+              >
+                {gstinFetch.loading ? '…' : 'Fetch'}
+              </button>
+            </div>
+          </Field>
+          <Field label="Legal Name" error={requireText(shipTo.lglNm)}>
+            <ClientSuggest
+              value={shipTo.lglNm}
+              onChange={(v) => set('lglNm', v)}
+              buyers={buyers}
+              matchOn="lglNm"
+              onPick={onPick}
+            />
+          </Field>
+
+          {/* Merged address: addr1 + addr2 concatenated, single input */}
           <Field label="Address" error={requireText(shipTo.addr1)}>
-            <input className={inp} value={shipTo.addr1} onChange={(e) => set('addr1', e.target.value)} />
+            <input
+              className={inp}
+              value={[shipTo.addr1, shipTo.addr2].filter(Boolean).join(' ')}
+              onChange={(e) => {
+                // Split at first comma or just put everything in addr1
+                const val = e.target.value
+                set('addr1', val)
+                // clear addr2 since we're merging into one field
+                onChange({ ...shipTo, addr1: val, addr2: undefined })
+              }}
+              placeholder="Address line 1 and 2"
+            />
           </Field>
           <div className="grid grid-cols-3 gap-2">
             <Field label="Location" error={requireText(shipTo.loc)}>
@@ -536,31 +755,7 @@ function ItemsSection({
         <label className="text-xs font-medium text-slate-500">Items {items.length > 0 && `(${items.length})`}</label>
       </div>
 
-      {pickerOpen ? (
-        <ProductPicker
-          products={products}
-          onPick={(p) => { onAddProduct(p); setPickerOpen(false) }}
-          onCreate={(p) => { onCreateProduct(p); setPickerOpen(false) }}
-          onCancel={() => setPickerOpen(false)}
-        />
-      ) : (
-        <div className="flex gap-2">
-          <button
-            onClick={() => setPickerOpen(true)}
-            className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
-          >
-            + Add from products
-          </button>
-          <button
-            onClick={() => onAddBlank()}
-            className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
-          >
-            + Blank
-          </button>
-        </div>
-      )}
-
-      <div className="mt-3 space-y-2">
+      <div className="space-y-2">
         {items.map((it, idx) => (
           <ItemRow
             key={idx}
@@ -571,6 +766,32 @@ function ItemsSection({
             onRemove={() => onRemove(idx)}
           />
         ))}
+      </div>
+
+      <div className="mt-3">
+        {pickerOpen ? (
+          <ProductPicker
+            products={products}
+            onPick={(p) => { onAddProduct(p); setPickerOpen(false) }}
+            onCreate={(p) => { onCreateProduct(p); setPickerOpen(false) }}
+            onCancel={() => setPickerOpen(false)}
+          />
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
+            >
+              + Add from products
+            </button>
+            <button
+              onClick={() => onAddBlank()}
+              className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
+            >
+              + Blank
+            </button>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -785,9 +1006,8 @@ function QuickProductForm({
       <div className="flex flex-wrap gap-1.5">
         {[0, 5, 12, 18, 28].map((slab) => (
           <button key={slab} type="button" onClick={() => set('gstRt', slab)}
-            className={`px-2.5 py-1 rounded-full text-xs border ${
-              p.gstRt === slab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300'
-            }`}>{slab}%</button>
+            className={`px-2.5 py-1 rounded-full text-xs border ${p.gstRt === slab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300'
+              }`}>{slab}%</button>
         ))}
       </div>
       <div className="flex gap-2 pt-1">
@@ -890,6 +1110,14 @@ function EwbSection({
   const set = <K extends keyof EwbDtls>(k: K, v: EwbDtls[K]) =>
     onChange({ ...(ewb ?? defaultEwb(invoiceDate)), [k]: v })
 
+  const [distanceStr, setDistanceStr] = useState<string>(String(ewb?.distance ?? 0))
+
+  // Validation logic
+  const partBMissing = ewb ? (!ewb.vehNo?.trim() && !ewb.transId?.trim()) : false
+  const transNameMissing = ewb ? (!!ewb.transId?.trim() && !ewb.transName?.trim()) : false
+  const transIdError = ewb?.transId?.trim()
+    ? (ewb.transId.trim().length !== 15 ? 'Transporter ID must be exactly 15 characters' : null)
+    : null
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="flex items-center gap-2 py-1 cursor-pointer">
@@ -905,13 +1133,18 @@ function EwbSection({
       {enabled && ewb && (
         <div className="mt-3 space-y-2">
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Distance (km) *">
+            {/* Distance can be auto-calculated by the system based on the 'From' and 'To' pincodes, but allowing manual override if needed (e.g. for multi-modal transport or specific routes). */}
+            <Field label="Distance (km)" hint={ewb.distance === 0 ? 'Distance will be auto-calculated' : null}>
               <input
                 className={inp}
-                type="number"
                 inputMode="numeric"
-                value={ewb.distance || ''}
-                onChange={(e) => set('distance', Number(e.target.value))}
+                pattern="[0-9]*"
+                value={distanceStr}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
+                  setDistanceStr(raw)
+                  set('distance', raw === '' ? 0 : Math.max(0, Math.floor(Number(raw))))
+                }}
               />
             </Field>
             <Field label="Vehicle number (optional)">
@@ -955,13 +1188,31 @@ function EwbSection({
           </Field>
 
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Transporter ID (optional)">
-              <input className={inp} value={ewb.transId ?? ''} onChange={(e) => set('transId', e.target.value || undefined)} />
+            {/* Either transporter ID or vehicle number is required to generate the E-way bill, but not necessarily both. This allows flexibility for cases where the transporter may not have a registered ID or when the vehicle details are not available at the time of invoice creation. */}
+            <Field label="Transporter ID (optional)" error={transIdError}>
+              <input
+                className={inp}
+                value={ewb.transId ?? ''}
+                onChange={(e) => set('transId', e.target.value.toUpperCase() || undefined)}
+                maxLength={15}
+              />
             </Field>
-            <Field label="Transporter name (optional)">
-              <input className={inp} value={ewb.transName ?? ''} onChange={(e) => set('transName', e.target.value || undefined)} />
+            {/* Transporter name is only required if transporter ID is provided, as the EWB system uses the transporter ID to fetch the name. If no transporter ID is given, the transporter name can be left blank without affecting EWB generation. */}
+            <Field label="Transporter name (optional)" error={transNameMissing ? 'Required' : null}>
+              <input
+                className={inp}
+                value={ewb.transName ?? ''}
+                onChange={(e) => set('transName', e.target.value || undefined)}
+              />
             </Field>
           </div>
+          {/* Show a warning if both transporter ID and vehicle number are missing, as at least one is required for EWB generation. */}
+          {partBMissing && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+              <span className="text-red-400 text-base leading-none mt-0.5">⚠</span>
+              <span>At least one of Transporter ID or Vehicle Number is required to generate the E-way bill.</span>
+            </div>
+          )}
         </div>
       )}
     </section>
