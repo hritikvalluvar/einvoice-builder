@@ -32,6 +32,17 @@ Open `http://localhost:5173` and sign in with a Supabase-registered account.
 
 Neither `dev` nor `main` accepts direct pushes or force pushes.
 
+### Vercel deploy behaviour
+
+`vercel.json` restricts deployments to save build minutes:
+
+- Push to `main` → production deploy
+- Push to `dev` → staging deploy
+- Push on a branch **with an open PR** → preview deploy
+- Push to any other branch → **skipped** ("Canceled by Ignored Build Step")
+
+Edge case: the *first* push to a new feature branch happens before the PR exists, so Vercel correctly skips that build. Open the PR and Vercel's PR event will trigger a fresh deploy within ~30s. If the preview doesn't appear, push one trivial commit to the PR branch — that re-triggers Vercel with the PR context set.
+
 ## Branch naming
 
 Prefix + short kebab-case topic. Descriptive, under ~40 characters.
