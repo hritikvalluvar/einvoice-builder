@@ -139,14 +139,14 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0
   // EWB is optional, but if provided, it must be valid
   const ewbValid = !ewb || (
-  (!!ewb.vehNo?.trim() || !!ewb.transId?.trim()) &&
-  (!ewb.transId?.trim() || !!ewb.transName?.trim()) &&
-  (!ewb.transId?.trim() || ewb.transId.trim().length === 15)
-)
+    (!!ewb.vehNo?.trim() || !!ewb.transId?.trim()) &&
+    (!ewb.transId?.trim() || !!ewb.transName?.trim()) &&
+    (!ewb.transId?.trim() || ewb.transId.trim().length === 15)
+  )
 
-const canSave =
-  billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
-  items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
+  const canSave =
+    billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
+    items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
 
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
@@ -246,10 +246,10 @@ const canSave =
           shipSame={shipSame}
           shipTo={shipTo}
           onToggleSame={(same) => {
-  setShipSame(same)
-  if (same) setShipTo(shipFromBillTo(billTo))
-  else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
-}}
+            setShipSame(same)
+            if (same) setShipTo(shipFromBillTo(billTo))
+            else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+          }}
           onChange={setShipTo}
         />
 
@@ -463,9 +463,18 @@ function ShipToSection({
   onChange: (s: ShipAddress) => void
 }) {
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
-  const setPin = (raw: string) => {}
+  const setPin = (raw: string) => {
+    const d = onlyDigits(raw, 6)
+    const pin = d ? Number(d) : 0
+    const stcd = pinToStcd(d)
+    onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })
+    if (d.length === 6) {
+      fetchCityFromPin(d).then((city) => {
+        if (city) onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}), loc: city })
+      })
+    }
+  }
 
-  // ── NEW: fetch state lives here ──
   const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
     { loading: false, error: null, cached: false },
   )
@@ -484,18 +493,16 @@ function ShipToSection({
     setGstinFetch({ loading: false, error: null, cached: r.cached })
     const d = r.data
     onChange({
-  ...shipTo,
-  gstin: g,
-  lglNm: d.lglNm || shipTo.lglNm,
-  addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),  // ← concatenate here
-  addr2: undefined,                                       // ← flatten, no separate addr2
-  loc:   d.loc  || shipTo.loc,
-  pin:   d.pin  || shipTo.pin,
-  stcd:  d.stcd || shipTo.stcd,
-})
+      ...shipTo,
+      gstin: g,
+      lglNm: d.lglNm || shipTo.lglNm,
+      addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),  // ← concatenate here
+      addr2: undefined,                                       // ← flatten, no separate addr2
+      loc: d.loc || shipTo.loc,
+      pin: d.pin || shipTo.pin,
+      stcd: d.stcd || shipTo.stcd,
+    })
   }
-
-  const fetchHint = gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
@@ -510,73 +517,73 @@ function ShipToSection({
         <span className="text-sm text-slate-700">Same as bill to</span>
       </label>
       {!shipSame && (
-  <div className="space-y-2 mt-2">
-    {/* GSTIN full-width with Fetch button */}
-    <Field
-      label="GSTIN (or URP)"
-      error={gstinFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
-      hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
-    >
-      <div className="flex gap-2">
-        <div className="flex-1 min-w-0">
-          <input
-            className={inp}
-            value={shipTo.gstin}
-            onChange={(e) => {
-              if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
-              set('gstin', e.target.value.toUpperCase())
-            }}
-            maxLength={15}
-          />
-        </div>
-        <button
-          type="button"
-          onClick={fetchGstinDetails}
-          disabled={!gstinFormatOk || gstinFetch.loading}
-          className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
-        >
-          {gstinFetch.loading ? '…' : 'Fetch'}
-        </button>
-      </div>
-    </Field>
-    <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
-      <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
-    </Field>
+        <div className="space-y-2 mt-2">
+          {/* GSTIN full-width with Fetch button */}
+          <Field
+            label="GSTIN (or URP)"
+            error={gstinFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
+            hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
+          >
+            <div className="flex gap-2">
+              <div className="flex-1 min-w-0">
+                <input
+                  className={inp}
+                  value={shipTo.gstin}
+                  onChange={(e) => {
+                    if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
+                    set('gstin', e.target.value.toUpperCase())
+                  }}
+                  maxLength={15}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={fetchGstinDetails}
+                disabled={!gstinFormatOk || gstinFetch.loading}
+                className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
+              >
+                {gstinFetch.loading ? '…' : 'Fetch'}
+              </button>
+            </div>
+          </Field>
+          <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
+            <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
+          </Field>
 
-    {/* Merged address: addr1 + addr2 concatenated, single input */}
-    <Field label="Address" error={requireText(shipTo.addr1)}>
-      <input
-        className={inp}
-        value={[shipTo.addr1, shipTo.addr2].filter(Boolean).join(' ')}
-        onChange={(e) => {
-          // Split at first comma or just put everything in addr1
-          const val = e.target.value
-          set('addr1', val)
-          // clear addr2 since we're merging into one field
-          onChange({ ...shipTo, addr1: val, addr2: undefined })
-        }}
-        placeholder="Address line 1 and 2"
-      />
-    </Field>
-    <div className="grid grid-cols-3 gap-2">
-      <Field label="Location" error={requireText(shipTo.loc)}>
-        <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
-      </Field>
-      <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
-        <input
-          className={inp}
-          inputMode="numeric"
-          maxLength={6}
-          value={shipTo.pin ? String(shipTo.pin) : ''}
-          onChange={(e) => setPin(e.target.value)}
-        />
-      </Field>
-      <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
-        <input className={inp} value={shipTo.stcd} onChange={(e) => set('stcd', e.target.value)} />
-      </Field>
-    </div>
-  </div>
-)}
+          {/* Merged address: addr1 + addr2 concatenated, single input */}
+          <Field label="Address" error={requireText(shipTo.addr1)}>
+            <input
+              className={inp}
+              value={[shipTo.addr1, shipTo.addr2].filter(Boolean).join(' ')}
+              onChange={(e) => {
+                // Split at first comma or just put everything in addr1
+                const val = e.target.value
+                set('addr1', val)
+                // clear addr2 since we're merging into one field
+                onChange({ ...shipTo, addr1: val, addr2: undefined })
+              }}
+              placeholder="Address line 1 and 2"
+            />
+          </Field>
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="Location" error={requireText(shipTo.loc)}>
+              <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
+            </Field>
+            <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
+              <input
+                className={inp}
+                inputMode="numeric"
+                maxLength={6}
+                value={shipTo.pin ? String(shipTo.pin) : ''}
+                onChange={(e) => setPin(e.target.value)}
+              />
+            </Field>
+            <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
+              <input className={inp} value={shipTo.stcd} onChange={(e) => set('stcd', e.target.value)} />
+            </Field>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -614,30 +621,30 @@ function ItemsSection({
         ))}
       </div>
 
-<div className="mt-3">
-      {pickerOpen ? (
-        <ProductPicker
-          products={products}
-          onPick={(p) => { onAddProduct(p); setPickerOpen(false) }}
-          onCreate={(p) => { onCreateProduct(p); setPickerOpen(false) }}
-          onCancel={() => setPickerOpen(false)}
-        />
-      ) : (
-        <div className="flex gap-2">
-          <button
-            onClick={() => setPickerOpen(true)}
-            className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
-          >
-            + Add from products
-          </button>
-          <button
-            onClick={() => onAddBlank()}
-            className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
-          >
-            + Blank
-          </button>
-        </div>
-      )}
+      <div className="mt-3">
+        {pickerOpen ? (
+          <ProductPicker
+            products={products}
+            onPick={(p) => { onAddProduct(p); setPickerOpen(false) }}
+            onCreate={(p) => { onCreateProduct(p); setPickerOpen(false) }}
+            onCancel={() => setPickerOpen(false)}
+          />
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
+            >
+              + Add from products
+            </button>
+            <button
+              onClick={() => onAddBlank()}
+              className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
+            >
+              + Blank
+            </button>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -852,9 +859,8 @@ function QuickProductForm({
       <div className="flex flex-wrap gap-1.5">
         {[0, 5, 12, 18, 28].map((slab) => (
           <button key={slab} type="button" onClick={() => set('gstRt', slab)}
-            className={`px-2.5 py-1 rounded-full text-xs border ${
-              p.gstRt === slab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300'
-            }`}>{slab}%</button>
+            className={`px-2.5 py-1 rounded-full text-xs border ${p.gstRt === slab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300'
+              }`}>{slab}%</button>
         ))}
       </div>
       <div className="flex gap-2 pt-1">
@@ -963,8 +969,8 @@ function EwbSection({
   const partBMissing = ewb ? (!ewb.vehNo?.trim() && !ewb.transId?.trim()) : false
   const transNameMissing = ewb ? (!!ewb.transId?.trim() && !ewb.transName?.trim()) : false
   const transIdError = ewb?.transId?.trim()
-  ? (ewb.transId.trim().length !== 15 ? 'Transporter ID must be exactly 15 characters' : null)
-  : null
+    ? (ewb.transId.trim().length !== 15 ? 'Transporter ID must be exactly 15 characters' : null)
+    : null
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="flex items-center gap-2 py-1 cursor-pointer">
@@ -980,20 +986,20 @@ function EwbSection({
       {enabled && ewb && (
         <div className="mt-3 space-y-2">
           <div className="grid grid-cols-2 gap-2">
-            // Distance can be auto-calculated by the system based on the 'From' and 'To' pincodes, but allowing manual override if needed (e.g. for multi-modal transport or specific routes).
+            {/* Distance can be auto-calculated by the system based on the 'From' and 'To' pincodes, but allowing manual override if needed (e.g. for multi-modal transport or specific routes). */}
             <Field label="Distance (km)" hint={ewb.distance === 0 ? 'Distance will be auto-calculated' : null}>
-  <input
-    className={inp}
-    inputMode="numeric"
-    pattern="[0-9]*"
-    value={distanceStr}
-    onChange={(e) => {
-      const raw = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
-      setDistanceStr(raw)
-      set('distance', raw === '' ? 0 : Math.max(0, Math.floor(Number(raw))))
-    }}
-  />
-</Field>
+              <input
+                className={inp}
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={distanceStr}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
+                  setDistanceStr(raw)
+                  set('distance', raw === '' ? 0 : Math.max(0, Math.floor(Number(raw))))
+                }}
+              />
+            </Field>
             <Field label="Vehicle number (optional)">
               <input
                 className={inp}
@@ -1035,25 +1041,25 @@ function EwbSection({
           </Field>
 
           <div className="grid grid-cols-2 gap-2">
-            // Either transporter ID or vehicle number is required to generate the E-way bill, but not necessarily both. This allows flexibility for cases where the transporter may not have a registered ID or when the vehicle details are not available at the time of invoice creation.
-  <Field label="Transporter ID (optional)" error={transIdError}>
-    <input
-      className={inp}
-      value={ewb.transId ?? ''}
-      onChange={(e) => set('transId', e.target.value.toUpperCase() || undefined)}
-      maxLength={15}
-    />
-  </Field>
-  // Transporter name is only required if transporter ID is provided, as the EWB system uses the transporter ID to fetch the name. If no transporter ID is given, the transporter name can be left blank without affecting EWB generation.
-  <Field label="Transporter name (optional)" error={transNameMissing ? 'Required' : null}>
-    <input
-      className={inp}
-      value={ewb.transName ?? ''}
-      onChange={(e) => set('transName', e.target.value || undefined)}
-    />
-  </Field>
-</div>
-// Show a warning if both transporter ID and vehicle number are missing, as at least one is required for EWB generation.
+            {/* Either transporter ID or vehicle number is required to generate the E-way bill, but not necessarily both. This allows flexibility for cases where the transporter may not have a registered ID or when the vehicle details are not available at the time of invoice creation. */}
+            <Field label="Transporter ID (optional)" error={transIdError}>
+              <input
+                className={inp}
+                value={ewb.transId ?? ''}
+                onChange={(e) => set('transId', e.target.value.toUpperCase() || undefined)}
+                maxLength={15}
+              />
+            </Field>
+            {/* Transporter name is only required if transporter ID is provided, as the EWB system uses the transporter ID to fetch the name. If no transporter ID is given, the transporter name can be left blank without affecting EWB generation. */}
+            <Field label="Transporter name (optional)" error={transNameMissing ? 'Required' : null}>
+              <input
+                className={inp}
+                value={ewb.transName ?? ''}
+                onChange={(e) => set('transName', e.target.value || undefined)}
+              />
+            </Field>
+          </div>
+          {/* Show a warning if both transporter ID and vehicle number are missing, as at least one is required for EWB generation. */}
           {partBMissing && (
             <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
               <span className="text-red-400 text-base leading-none mt-0.5">⚠</span>
