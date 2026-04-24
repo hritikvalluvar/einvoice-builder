@@ -951,6 +951,7 @@ function EwbSection({
   const set = <K extends keyof EwbDtls>(k: K, v: EwbDtls[K]) =>
     onChange({ ...(ewb ?? defaultEwb(invoiceDate)), [k]: v })
 
+  const [distanceStr, setDistanceStr] = useState<string>(String(ewb?.distance ?? 0))
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="flex items-center gap-2 py-1 cursor-pointer">
@@ -966,15 +967,19 @@ function EwbSection({
       {enabled && ewb && (
         <div className="mt-3 space-y-2">
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Distance (km) *">
-              <input
-                className={inp}
-                type="number"
-                inputMode="numeric"
-                value={ewb.distance || ''}
-                onChange={(e) => set('distance', Number(e.target.value))}
-              />
-            </Field>
+            <Field label="Distance (km)" hint={ewb.distance === 0 ? 'Distance will be auto-calculated by the portal' : null}>
+  <input
+    className={inp}
+    inputMode="numeric"
+    pattern="[0-9]*"
+    value={distanceStr}
+    onChange={(e) => {
+      const raw = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
+      setDistanceStr(raw)
+      set('distance', raw === '' ? 0 : Math.max(0, Math.floor(Number(raw))))
+    }}
+  />
+</Field>
             <Field label="Vehicle number (optional)">
               <input
                 className={inp}
