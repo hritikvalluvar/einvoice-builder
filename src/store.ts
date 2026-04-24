@@ -25,8 +25,8 @@ type State = {
   setUserEmail: (email: string | null) => void
   bootstrap: (userId: string) => Promise<void>
   loadCompanyData: (companyId: string) => Promise<void>
-  createCompany: (name: string) => Promise<{ ok: boolean; error?: string }>
-  joinCompany: (code: string) => Promise<{ ok: boolean; error?: string }>
+  createCompany: (name: string) => Promise<{ ok: boolean; error?: string; companyId?: string }>
+  joinCompany: (code: string) => Promise<{ ok: boolean; error?: string; companyId?: string }>
   listMembers: () => Promise<Member[]>
   removeMember: (userId: string) => Promise<{ ok: boolean; error?: string }>
   clear: () => void
@@ -41,6 +41,16 @@ type State = {
 }
 
 const emptySeller: Seller = { gstin: '', lglNm: '', addr1: '', loc: '', pin: 0, stcd: '09' }
+
+const LAST_COMPANY_KEY = 'einvoice:lastCompanyId'
+
+const readLastCompanyId = (): string | null => {
+  try { return localStorage.getItem(LAST_COMPANY_KEY) } catch { return null }
+}
+
+const writeLastCompanyId = (id: string) => {
+  try { localStorage.setItem(LAST_COMPANY_KEY, id) } catch { /* ignore */ }
+}
 
 export const useStore = create<State>()((set, get) => ({
   userId: null,
@@ -84,12 +94,14 @@ export const useStore = create<State>()((set, get) => ({
       return
     }
 
-    const first = companies[0]
-    await get().loadCompanyData(first.id)
+    const lastId = readLastCompanyId()
+    const target = companies.find((c) => c.id === lastId) ?? companies[0]
+    await get().loadCompanyData(target.id)
   },
 
   loadCompanyData: async (companyId) => {
     set({ loading: true, companyId })
+    writeLastCompanyId(companyId)
 
     const co = get().companies.find((c) => c.id === companyId) ?? null
 
@@ -128,8 +140,9 @@ export const useStore = create<State>()((set, get) => ({
     }
     const userId = get().userId
     if (!userId || !data) return { ok: false, error: 'Missing user or company' }
+    writeLastCompanyId(data)
     await get().bootstrap(userId)
-    return { ok: true }
+    return { ok: true, companyId: data }
   },
 
   joinCompany: async (code) => {
@@ -140,8 +153,9 @@ export const useStore = create<State>()((set, get) => ({
     }
     const userId = get().userId
     if (!userId || !data) return { ok: false, error: 'Missing user or company' }
+    writeLastCompanyId(data)
     await get().bootstrap(userId)
-    return { ok: true }
+    return { ok: true, companyId: data }
   },
 
   listMembers: async () => {
@@ -162,19 +176,22 @@ export const useStore = create<State>()((set, get) => ({
     return { ok: true }
   },
 
-  clear: () => set({
-    userId: null,
-    userEmail: null,
-    companyId: null,
-    company: null,
-    companies: [],
-    ready: false,
-    loading: false,
-    seller: emptySeller,
-    buyers: [],
-    products: [],
-    invoices: [],
-  }),
+  clear: () => {
+    try { localStorage.removeItem(LAST_COMPANY_KEY) } catch { /* ignore */ }
+    set({
+      userId: null,
+      userEmail: null,
+      companyId: null,
+      company: null,
+      companies: [],
+      ready: false,
+      loading: false,
+      seller: emptySeller,
+      buyers: [],
+      products: [],
+      invoices: [],
+    })
+  },
 
   setSeller: async (s) => {
     const companyId = get().companyId

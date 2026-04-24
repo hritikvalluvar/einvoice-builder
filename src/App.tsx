@@ -6,6 +6,7 @@ import { ProductList } from './components/ProductList'
 import { Account } from './components/Account'
 import { Login } from './components/Login'
 import { Onboarding } from './components/Onboarding'
+import { CompanySwitcher } from './components/CompanySwitcher'
 import { useStore } from './store'
 import { supabase } from './supabase'
 
@@ -53,14 +54,18 @@ export default function App() {
 
   if (editingId) {
     return (
-      <div className="h-full max-w-md mx-auto bg-white shadow-xl">
-        <InvoiceEditor invoiceId={editingId} onDone={() => setEditingId(undefined)} />
+      <div className="h-full max-w-md mx-auto bg-white shadow-xl flex flex-col">
+        <CompanySwitcher />
+        <div className="flex-1 overflow-hidden">
+          <InvoiceEditor invoiceId={editingId} onDone={() => setEditingId(undefined)} />
+        </div>
       </div>
     )
   }
 
   return (
     <div className="h-full max-w-md mx-auto bg-white shadow-xl flex flex-col">
+      <CompanySwitcher />
       <div className="flex-1 overflow-hidden">
         {tab === 'create' && (
           <InvoiceEditor key={createKey} onDone={() => setCreateKey((k) => k + 1)} />
