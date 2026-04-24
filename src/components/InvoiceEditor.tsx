@@ -42,6 +42,11 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     { loading: false, error: null, cached: false },
   )
 
+  // ── Snapshot tracking if user changes GST details after fetching ──
+  const [billToSnapshot, setBillToSnapshot] = useState<Partial<BillTo> | null>(null)
+  const [shipToSnapshot, setShipToSnapshot] = useState<Partial<ShipAddress> | null>(null)
+  const [pendingAction, setPendingAction] = useState<'save' | 'export' | null>(null)
+
   const fetchGstinDetails = async () => {
     const g = billTo.gstin.trim().toUpperCase()
     if (validateGstin(g, { required: true }) !== null) return
@@ -68,6 +73,16 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setBillTo(next)
     setBuyerId(undefined)
     if (shipSame) setShipTo(shipFromBillTo(next))
+
+       // ── record snapshot of what was auto-filled ──
+    setBillToSnapshot({
+      lglNm: next.lglNm,
+      addr1: next.addr1,
+      addr2: next.addr2,
+      loc: next.loc,
+      pin: next.pin,
+      stcd: next.stcd,
+    })
   }
 
   const isIntra = seller.stcd === billTo.pos
@@ -148,6 +163,16 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
     items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
 
+// ── detect if user edited auto-filled fields after fetch ──
+  const snapshotKeys: (keyof BillTo)[] = ['lglNm', 'addr1', 'addr2', 'loc', 'pin', 'stcd']
+  const billToChanged = billToSnapshot !== null && snapshotKeys.some(
+    (k) => String(billTo[k] ?? '') !== String(billToSnapshot[k] ?? '')
+  )
+  const shipToChanged = shipToSnapshot !== null && snapshotKeys.some(
+    (k) => String((shipTo as any)[k] ?? '') !== String((shipToSnapshot as any)[k] ?? '')
+  )
+  const hasFetchChanges = billToChanged || shipToChanged
+
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
     docNo: docNo.trim(),
@@ -161,14 +186,13 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     createdAt: existing?.createdAt ?? Date.now(),
   })
 
-  const save = () => {
-    if (!canSave) return
+  // ── split actual save/export logic out so dialog can call them ──
+  const doSave = () => {
     upsertInvoice(buildInvoice())
     onDone()
   }
 
-  const exportJson = () => {
-    if (!canSave) return
+  const doExport = () => {
     const inv = buildInvoice()
     const gstinKey = normGstin(billTo.gstin)
     const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
@@ -191,7 +215,6 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     } else if (matched && !inv.buyerId) {
       inv.buyerId = matched.id
     }
-
     upsertInvoice(inv)
     const payload = [toNicJson(seller, inv)]
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -202,6 +225,19 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
     onDone()
+  }
+
+  // ── save/export now gate through dialog if needed ──
+  const save = () => {
+    if (!canSave) return
+    if (hasFetchChanges) { setPendingAction('save'); return }
+    doSave()
+  }
+
+  const exportJson = () => {
+    if (!canSave) return
+    if (hasFetchChanges) { setPendingAction('export'); return }
+    doExport()
   }
 
   return (
@@ -243,15 +279,16 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
         />
 
         <ShipToSection
-          shipSame={shipSame}
-          shipTo={shipTo}
-          onToggleSame={(same) => {
-            setShipSame(same)
-            if (same) setShipTo(shipFromBillTo(billTo))
-            else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
-          }}
-          onChange={setShipTo}
-        />
+  shipSame={shipSame}
+  shipTo={shipTo}
+  onToggleSame={(same) => {
+    setShipSame(same)
+    if (same) setShipTo(shipFromBillTo(billTo))
+    else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+  }}
+  onChange={setShipTo}
+  onFetchSuccess={(fetched) => setShipToSnapshot(fetched)}  // ← ADD this
+/>
 
         <ItemsSection
           items={items}
@@ -297,6 +334,40 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           </button>
         </div>
       </div>
+      {/* ── confirmation dialog ── */}
+      {pendingAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-3">
+            <h2 className="text-base font-semibold text-slate-900">Details changed after fetch</h2>
+            <p className="text-sm text-slate-600">
+              Auto-filled details
+              {billToChanged && shipToChanged
+                ? ' in Bill To and Ship To'
+                : billToChanged ? ' in Bill To' : ' in Ship To'}
+              {' '}were manually edited after fetching from GSTIN. They may no longer match the registered details.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setPendingAction(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Rectify
+              </button>
+              <button
+                onClick={() => {
+                  const action = pendingAction
+                  setPendingAction(null)
+                  if (action === 'save') doSave()
+                  else doExport()
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
+              >
+                Proceed anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -455,12 +526,13 @@ function ClientSuggest({
 }
 
 function ShipToSection({
-  shipSame, shipTo, onToggleSame, onChange,
+  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess,  // ← ADD here
 }: {
   shipSame: boolean
   shipTo: ShipAddress
   onToggleSame: (same: boolean) => void
   onChange: (s: ShipAddress) => void
+  onFetchSuccess: (fetched: Partial<ShipAddress>) => void
 }) {
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
   const setPin = (raw: string) => {
@@ -502,6 +574,16 @@ function ShipToSection({
       pin: d.pin || shipTo.pin,
       stcd: d.stcd || shipTo.stcd,
     })
+    const merged = {
+  lglNm: d.lglNm || shipTo.lglNm,
+  addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),
+  addr2: undefined,
+  loc: d.loc || shipTo.loc,
+  pin: d.pin || shipTo.pin,
+  stcd: d.stcd || shipTo.stcd,
+}
+onChange({ ...shipTo, gstin: g, ...merged })
+onFetchSuccess(merged)
   }
 
   return (
