@@ -74,7 +74,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setBuyerId(undefined)
     if (shipSame) setShipTo(shipFromBillTo(next))
 
-       // ── record snapshot of what was auto-filled ──
+    // ── record snapshot of what was auto-filled ──
     setBillToSnapshot({
       lglNm: next.lglNm,
       addr1: next.addr1,
@@ -95,6 +95,15 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     const bill = billFromBuyer(b)
     setBillTo(bill)
     if (shipSame) setShipTo(shipFromBillTo(bill))
+    // ── record snapshot so edits after picking trigger the dialog ──
+    setBillToSnapshot({
+      lglNm: bill.lglNm,
+      addr1: bill.addr1,
+      addr2: bill.addr2,
+      loc: bill.loc,
+      pin: bill.pin,
+      stcd: bill.stcd,
+    })
   }
 
   const updateBillTo = (patch: Partial<BillTo>) => {
@@ -163,7 +172,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
     items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
 
-// ── detect if user edited auto-filled fields after fetch ──
+  // ── detect if user edited auto-filled fields after fetch ──
   const snapshotKeys: (keyof BillTo)[] = ['lglNm', 'addr1', 'addr2', 'loc', 'pin', 'stcd']
   const billToChanged = billToSnapshot !== null && snapshotKeys.some(
     (k) => String(billTo[k] ?? '') !== String(billToSnapshot[k] ?? '')
@@ -188,7 +197,30 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
 
   // ── split actual save/export logic out so dialog can call them ──
   const doSave = () => {
-    upsertInvoice(buildInvoice())
+    // on save, if GSTIN doesn't match any existing buyer, create a new buyer record so it shows up in suggestions later
+    const inv = buildInvoice()
+    const gstinKey = normGstin(billTo.gstin)
+    const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
+    if (!matched && gstinKey) {
+      const newBuyer: Buyer = {
+        id: newId(),
+        gstin: billTo.gstin,
+        lglNm: billTo.lglNm,
+        addr1: billTo.addr1,
+        addr2: billTo.addr2,
+        loc: billTo.loc,
+        pin: billTo.pin,
+        pos: billTo.pos,
+        stcd: billTo.stcd,
+        ph: billTo.ph,
+        em: billTo.em,
+      }
+      upsertBuyer(newBuyer)
+      inv.buyerId = newBuyer.id
+    } else if (matched && !inv.buyerId) {
+      inv.buyerId = matched.id
+    }
+    upsertInvoice(inv)
     onDone()
   }
 
@@ -279,16 +311,38 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
         />
 
         <ShipToSection
-  shipSame={shipSame}
-  shipTo={shipTo}
-  onToggleSame={(same) => {
-    setShipSame(same)
-    if (same) setShipTo(shipFromBillTo(billTo))
-    else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
-  }}
-  onChange={setShipTo}
-  onFetchSuccess={(fetched) => setShipToSnapshot(fetched)}  // ← ADD this
-/>
+          shipSame={shipSame}
+          shipTo={shipTo}
+          onToggleSame={(same) => {
+            setShipSame(same)
+            if (same) setShipTo(shipFromBillTo(billTo))
+            else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+          }}
+          onChange={setShipTo}
+          onFetchSuccess={(fetched) => setShipToSnapshot(fetched)}
+          buyers={buyers}
+          onPick={(b) => {
+            const s: ShipAddress = {
+              gstin: b.gstin,
+              lglNm: b.lglNm,
+              addr1: b.addr1,
+              addr2: b.addr2,
+              loc: b.loc,
+              pin: b.pin,
+              stcd: b.stcd,
+            }
+            setShipTo(s)
+            // ── record snapshot so edits after picking trigger the dialog ──
+            setShipToSnapshot({
+              lglNm: b.lglNm,
+              addr1: b.addr1,
+              addr2: b.addr2,
+              loc: b.loc,
+              pin: b.pin,
+              stcd: b.stcd,
+            })
+          }}
+        />
 
         <ItemsSection
           items={items}
@@ -526,13 +580,15 @@ function ClientSuggest({
 }
 
 function ShipToSection({
-  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess,  // ← ADD here
+  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess, buyers, onPick,
 }: {
   shipSame: boolean
   shipTo: ShipAddress
   onToggleSame: (same: boolean) => void
   onChange: (s: ShipAddress) => void
   onFetchSuccess: (fetched: Partial<ShipAddress>) => void
+  buyers: Buyer[]
+  onPick: (b: Buyer) => void
 }) {
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
   const setPin = (raw: string) => {
@@ -575,15 +631,15 @@ function ShipToSection({
       stcd: d.stcd || shipTo.stcd,
     })
     const merged = {
-  lglNm: d.lglNm || shipTo.lglNm,
-  addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),
-  addr2: undefined,
-  loc: d.loc || shipTo.loc,
-  pin: d.pin || shipTo.pin,
-  stcd: d.stcd || shipTo.stcd,
-}
-onChange({ ...shipTo, gstin: g, ...merged })
-onFetchSuccess(merged)
+      lglNm: d.lglNm || shipTo.lglNm,
+      addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),
+      addr2: undefined,
+      loc: d.loc || shipTo.loc,
+      pin: d.pin || shipTo.pin,
+      stcd: d.stcd || shipTo.stcd,
+    }
+    onChange({ ...shipTo, gstin: g, ...merged })
+    onFetchSuccess(merged)
   }
 
   return (
@@ -608,14 +664,17 @@ onFetchSuccess(merged)
           >
             <div className="flex gap-2">
               <div className="flex-1 min-w-0">
-                <input
-                  className={inp}
+                <ClientSuggest
                   value={shipTo.gstin}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
-                    set('gstin', e.target.value.toUpperCase())
+                    set('gstin', v.toUpperCase())
                   }}
+                  buyers={buyers}
+                  matchOn="gstin"
+                  onPick={onPick}
                   maxLength={15}
+                  transform={(v) => v.toUpperCase()}
                 />
               </div>
               <button
@@ -628,8 +687,14 @@ onFetchSuccess(merged)
               </button>
             </div>
           </Field>
-          <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
-            <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
+          <Field label="Legal Name" error={requireText(shipTo.lglNm)}>
+            <ClientSuggest
+              value={shipTo.lglNm}
+              onChange={(v) => set('lglNm', v)}
+              buyers={buyers}
+              matchOn="lglNm"
+              onPick={onPick}
+            />
           </Field>
 
           {/* Merged address: addr1 + addr2 concatenated, single input */}
