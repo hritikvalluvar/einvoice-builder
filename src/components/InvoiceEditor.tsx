@@ -595,6 +595,20 @@ function ItemsSection({
         <label className="text-xs font-medium text-slate-500">Items {items.length > 0 && `(${items.length})`}</label>
       </div>
 
+      <div className="space-y-2">
+        {items.map((it, idx) => (
+          <ItemRow
+            key={idx}
+            item={it}
+            taxable={lines[idx]?.assAmt ?? 0}
+            total={lines[idx]?.totItemVal ?? 0}
+            onUpdate={(patch) => onUpdate(idx, patch)}
+            onRemove={() => onRemove(idx)}
+          />
+        ))}
+      </div>
+
+<div className="mt-3">
       {pickerOpen ? (
         <ProductPicker
           products={products}
@@ -618,18 +632,6 @@ function ItemsSection({
           </button>
         </div>
       )}
-
-      <div className="mt-3 space-y-2">
-        {items.map((it, idx) => (
-          <ItemRow
-            key={idx}
-            item={it}
-            taxable={lines[idx]?.assAmt ?? 0}
-            total={lines[idx]?.totItemVal ?? 0}
-            onUpdate={(patch) => onUpdate(idx, patch)}
-            onRemove={() => onRemove(idx)}
-          />
-        ))}
       </div>
     </section>
   )
