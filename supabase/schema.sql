@@ -202,7 +202,20 @@ begin
   delete from memberships where company_id = p_company_id and user_id = p_user_id;
 end $$;
 
+create unique index if not exists sellers_gstin_unique on sellers(gstin)
+  where gstin is not null and gstin != '';
+
+create or replace function gstin_claim_info(p_gstin text)
+returns text language sql stable security definer set search_path = public
+as $$
+  select c.name from sellers s
+  join companies c on c.id = s.company_id
+  where s.gstin = p_gstin
+  limit 1;
+$$;
+
 grant execute on function create_company(text)       to authenticated;
 grant execute on function join_company(text)         to authenticated;
 grant execute on function list_members(uuid)         to authenticated;
 grant execute on function remove_member(uuid, uuid)  to authenticated;
+grant execute on function gstin_claim_info(text)     to authenticated;

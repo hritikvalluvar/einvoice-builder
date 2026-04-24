@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useStore } from '../store'
+import { supabase } from '../supabase'
 import { lookupGstin } from '../gstinLookup'
 import { validateGstin, stcdName } from '../validators'
 import type { Seller } from '../types'
 
 type Mode = 'gstin' | 'manual'
-type Fetched = Seller & { tradeNam?: string | null }
+type Fetched = Seller & { tradeNam?: string | null; status?: string | null }
 
 export function AddCompanyModal({ onClose }: { onClose: () => void }) {
   const createCompany = useStore((s) => s.createCompany)
@@ -23,12 +24,20 @@ export function AddCompanyModal({ onClose }: { onClose: () => void }) {
   const doFetch = async () => {
     setErr(null)
     setBusy(true)
-    const r = await lookupGstin(gstin.trim().toUpperCase())
+    const g = gstin.trim().toUpperCase()
+    const { data: claimName, error: claimErr } = await supabase.rpc('gstin_claim_info', { p_gstin: g })
+    if (claimErr) console.error('[gstin_claim_info]', claimErr)
+    if (claimName) {
+      setBusy(false)
+      setErr(`Already registered as "${claimName}" — contact them for an invite code`)
+      return
+    }
+    const r = await lookupGstin(g)
     setBusy(false)
     if (!r.ok) { setErr(r.error); return }
     const d = r.data
     setFetched({
-      gstin: d.gstin ?? gstin.toUpperCase(),
+      gstin: d.gstin ?? g,
       lglNm: d.lglNm ?? '',
       addr1: d.addr1 ?? '',
       addr2: d.addr2 ?? undefined,
@@ -36,6 +45,7 @@ export function AddCompanyModal({ onClose }: { onClose: () => void }) {
       pin: d.pin ?? 0,
       stcd: d.stcd ?? '09',
       tradeNam: (d as any).tradeNam ?? null,
+      status: (d as any).status ?? null,
     })
   }
 
@@ -45,7 +55,7 @@ export function AddCompanyModal({ onClose }: { onClose: () => void }) {
     setErr(null)
     const res = await createCompany(fetched.lglNm || fetched.tradeNam || 'Untitled')
     if (!res.ok) { setBusy(false); setErr(res.error ?? 'Could not create company'); return }
-    const { tradeNam: _omit, ...sellerData } = fetched
+    const { tradeNam: _omit, status: _omitStatus, ...sellerData } = fetched
     await setSeller(sellerData)
     setBusy(false)
     onClose()
@@ -102,7 +112,14 @@ export function AddCompanyModal({ onClose }: { onClose: () => void }) {
         {mode === 'gstin' && fetched && (
           <>
             <div className="rounded-xl border border-slate-200 p-3 space-y-1 bg-slate-50">
-              <div className="text-sm font-semibold text-slate-900">{fetched.lglNm || fetched.tradeNam || 'Unnamed'}</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-slate-900 truncate">{fetched.lglNm || fetched.tradeNam || 'Unnamed'}</div>
+                {fetched.status && (
+                  <span className={`shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full ${fetched.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    {fetched.status}
+                  </span>
+                )}
+              </div>
               {fetched.tradeNam && fetched.tradeNam !== fetched.lglNm && (
                 <div className="text-xs text-slate-500">{fetched.tradeNam}</div>
               )}
@@ -110,6 +127,9 @@ export function AddCompanyModal({ onClose }: { onClose: () => void }) {
               <div className="text-xs text-slate-600">{fetched.loc}{fetched.pin ? ` – ${fetched.pin}` : ''}{stcdName(fetched.stcd) ? ` · ${stcdName(fetched.stcd)}` : ''}</div>
               <div className="text-[11px] text-slate-500 font-mono pt-1">{fetched.gstin}</div>
             </div>
+            {fetched.status && fetched.status !== 'Active' && (
+              <p className="text-xs text-red-600">This GSTIN is {fetched.status}. You can still create the company, but you will not be able to issue valid invoices until it is reactivated.</p>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() => { setFetched(null); setErr(null) }}

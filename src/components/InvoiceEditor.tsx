@@ -6,7 +6,7 @@ import { UQC_CODES } from '../uqc'
 import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, pinToStcd, stcdName, onlyDigits } from '../validators'
 import { fetchCityFromPin } from '../pincode'
 import { normGstin } from '../normalize'
-import { lookupGstin } from '../gstinLookup'
+import { lookupGstin, checkGstinStatus } from '../gstinLookup'
 
 type Props = {
   invoiceId?: string
@@ -46,6 +46,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const [billToSnapshot, setBillToSnapshot] = useState<Partial<BillTo> | null>(null)
   const [shipToSnapshot, setShipToSnapshot] = useState<Partial<ShipAddress> | null>(null)
   const [pendingAction, setPendingAction] = useState<'save' | 'export' | null>(null)
+  const [statusWarn, setStatusWarn] = useState<string | null>(null)
 
   const fetchGstinDetails = async () => {
     const g = billTo.gstin.trim().toUpperCase()
@@ -266,9 +267,16 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     doSave()
   }
 
-  const exportJson = () => {
+  const exportJson = async () => {
     if (!canSave) return
     if (hasFetchChanges) { setPendingAction('export'); return }
+    if (validateGstin(billTo.gstin, { required: true }) === null) {
+      const status = await checkGstinStatus(billTo.gstin)
+      if (status !== null && status !== 'Active') {
+        setStatusWarn(status)
+        return
+      }
+    }
     doExport()
   }
 
@@ -417,6 +425,32 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
                 className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
               >
                 Proceed anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {statusWarn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-3">
+            <h2 className="text-base font-semibold text-slate-900">Buyer GSTIN is {statusWarn}</h2>
+            <p className="text-sm text-slate-600">
+              {billTo.gstin} is currently <span className="font-medium text-red-600">{statusWarn}</span> on the GST portal.
+              Issuing an invoice against a {statusWarn.toLowerCase()} GSTIN may be non-compliant and the buyer's ITC claim could be denied.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setStatusWarn(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Go back
+              </button>
+              <button
+                onClick={() => { setStatusWarn(null); doExport() }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-medium active:scale-95 transition"
+              >
+                Export anyway
               </button>
             </div>
           </div>
