@@ -137,10 +137,16 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const removeItem = (idx: number) => setItems((arr) => arr.filter((_, i) => i !== idx))
 
   const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0
-  const canSave =
-    billToValid && items.length > 0 && !!docNo.trim() && !!docDt &&
-    items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
+  // EWB is optional, but if provided, it must be valid
+  const ewbValid = !ewb || (
+  (!!ewb.vehNo?.trim() || !!ewb.transId?.trim()) &&
+  (!ewb.transId?.trim() || !!ewb.transName?.trim()) &&
+  (!ewb.transId?.trim() || ewb.transId.trim().length === 15)
+)
 
+const canSave =
+  billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
+  items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
 
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
@@ -952,6 +958,13 @@ function EwbSection({
     onChange({ ...(ewb ?? defaultEwb(invoiceDate)), [k]: v })
 
   const [distanceStr, setDistanceStr] = useState<string>(String(ewb?.distance ?? 0))
+
+  // Validation logic
+  const partBMissing = ewb ? (!ewb.vehNo?.trim() && !ewb.transId?.trim()) : false
+  const transNameMissing = ewb ? (!!ewb.transId?.trim() && !ewb.transName?.trim()) : false
+  const transIdError = ewb?.transId?.trim()
+  ? (ewb.transId.trim().length !== 15 ? 'Transporter ID must be exactly 15 characters' : null)
+  : null
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="flex items-center gap-2 py-1 cursor-pointer">
@@ -967,7 +980,8 @@ function EwbSection({
       {enabled && ewb && (
         <div className="mt-3 space-y-2">
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Distance (km)" hint={ewb.distance === 0 ? 'Distance will be auto-calculated by the portal' : null}>
+            // Distance can be auto-calculated by the system based on the 'From' and 'To' pincodes, but allowing manual override if needed (e.g. for multi-modal transport or specific routes).
+            <Field label="Distance (km)" hint={ewb.distance === 0 ? 'Distance will be auto-calculated' : null}>
   <input
     className={inp}
     inputMode="numeric"
@@ -1021,13 +1035,31 @@ function EwbSection({
           </Field>
 
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Transporter ID (optional)">
-              <input className={inp} value={ewb.transId ?? ''} onChange={(e) => set('transId', e.target.value || undefined)} />
-            </Field>
-            <Field label="Transporter name (optional)">
-              <input className={inp} value={ewb.transName ?? ''} onChange={(e) => set('transName', e.target.value || undefined)} />
-            </Field>
-          </div>
+            // Either transporter ID or vehicle number is required to generate the E-way bill, but not necessarily both. This allows flexibility for cases where the transporter may not have a registered ID or when the vehicle details are not available at the time of invoice creation.
+  <Field label="Transporter ID (optional)" error={transIdError}>
+    <input
+      className={inp}
+      value={ewb.transId ?? ''}
+      onChange={(e) => set('transId', e.target.value.toUpperCase() || undefined)}
+      maxLength={15}
+    />
+  </Field>
+  // Transporter name is only required if transporter ID is provided, as the EWB system uses the transporter ID to fetch the name. If no transporter ID is given, the transporter name can be left blank without affecting EWB generation.
+  <Field label="Transporter name (optional)" error={transNameMissing ? 'Required' : null}>
+    <input
+      className={inp}
+      value={ewb.transName ?? ''}
+      onChange={(e) => set('transName', e.target.value || undefined)}
+    />
+  </Field>
+</div>
+// Show a warning if both transporter ID and vehicle number are missing, as at least one is required for EWB generation.
+          {partBMissing && (
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+              <span className="text-red-400 text-base leading-none mt-0.5">⚠</span>
+              <span>At least one of Transporter ID or Vehicle Number is required to generate the E-way bill.</span>
+            </div>
+          )}
         </div>
       )}
     </section>
