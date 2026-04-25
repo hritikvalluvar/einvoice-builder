@@ -3,11 +3,11 @@ import { useStore, newId } from '../store'
 import type { Invoice, InvoiceItem, Buyer, Product, ShipAddress, BillTo, EwbDtls } from '../types'
 import { computeLines, summarize, toNicJson, fromDateInput, toDateInput, shipFromBillTo, billFromBuyer } from '../einvoice'
 import { UQC_CODES } from '../uqc'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, pinToStcd, stcdName, onlyDigits } from '../validators'
-import { fetchCityFromPin } from '../pincode'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, stcdName, onlyDigits } from '../validators'
 import { normGstin } from '../normalize'
-import { lookupGstin, checkGstinStatus } from '../gstinLookup'
+import { checkGstinStatus } from '../gstinLookup'
 import { suggestNextDocNo } from '../invoiceNumber'
+import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
 
 type Props = {
   invoiceId?: string
@@ -39,9 +39,6 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     existing?.shipTo ?? { gstin: 'URP', lglNm: '', addr1: '', loc: '', pin: 0, stcd: '09' },
   )
   const [ewb, setEwb] = useState<EwbDtls | undefined>(existing?.ewb)
-  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
-    { loading: false, error: null, cached: false },
-  )
 
   // ── Snapshot tracking if user changes GST details after fetching ──
   const [billToSnapshot, setBillToSnapshot] = useState<Partial<BillTo> | null>(null)
@@ -51,34 +48,24 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const [statusWarnAction, setStatusWarnAction] = useState<'save' | 'export'>('export')
   const [reviewAction, setReviewAction] = useState<'save' | 'export' | null>(null)
 
-  const fetchGstinDetails = async () => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const billToFetch = useGstinFetch(billTo.gstin, (data) => {
     const g = billTo.gstin.trim().toUpperCase()
-    if (validateGstin(g, { required: true }) !== null) return
-    setGstinFetch({ loading: true, error: null, cached: false })
-    const r = await lookupGstin(g)
-    if (!r.ok) {
-      setGstinFetch({ loading: false, error: r.error, cached: false })
-      return
-    }
-    setGstinFetch({ loading: false, error: null, cached: r.cached })
-    const d = r.data
     const next: BillTo = {
       gstin: g,
-      lglNm: d.lglNm || billTo.lglNm,
-      addr1: d.addr1 || billTo.addr1,
-      addr2: d.addr2 ?? billTo.addr2,
-      loc: d.loc || billTo.loc,
-      pin: d.pin || billTo.pin,
-      stcd: d.stcd || billTo.stcd,
-      pos: d.pos || d.stcd || billTo.pos,
+      lglNm: data.lglNm || billTo.lglNm,
+      addr1: data.addr1 || billTo.addr1,
+      addr2: data.addr2 ?? billTo.addr2,
+      loc: data.loc || billTo.loc,
+      pin: data.pin || billTo.pin,
+      stcd: data.stcd || billTo.stcd,
+      pos: data.pos || data.stcd || billTo.pos,
       ph: billTo.ph,
       em: billTo.em,
     }
     setBillTo(next)
     setBuyerId(undefined)
     if (shipSame) setShipTo(shipFromBillTo(next))
-
-    // ── record snapshot of what was auto-filled ──
     setBillToSnapshot({
       lglNm: next.lglNm,
       addr1: next.addr1,
@@ -87,7 +74,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
       pin: next.pin,
       stcd: next.stcd,
     })
-  }
+  })
 
   const isIntra = seller.stcd === billTo.pos
   const lines = useMemo(() => computeLines(items, isIntra), [items, isIntra])
@@ -111,30 +98,12 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   }
 
   const updateBillTo = (patch: Partial<BillTo>) => {
-    if (patch.gstin != null && gstinFetch.error) {
-      setGstinFetch({ loading: false, error: null, cached: false })
-    }
+    if (patch.gstin != null && billToFetch.error) billToFetch.clearError()
     setBillTo((prev) => {
-      let next = { ...prev, ...patch }
-      if (patch.pin != null && patch.stcd == null) {
-        const stcd = pinToStcd(patch.pin)
-        if (stcd) next = { ...next, stcd, pos: stcd }
-      }
+      const next = { ...prev, ...patch }
       if (shipSame) setShipTo(shipFromBillTo(next))
       return next
     })
-    if (patch.pin != null && String(patch.pin).length === 6) {
-      const pin = patch.pin
-      fetchCityFromPin(pin).then((city) => {
-        if (!city) return
-        setBillTo((prev) => {
-          if (prev.pin !== pin) return prev
-          const next = { ...prev, loc: city }
-          if (shipSame) setShipTo(shipFromBillTo(next))
-          return next
-        })
-      })
-    }
   }
 
   const addItemFromProduct = (p: Product) => {
@@ -347,13 +316,37 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onChange={updateBillTo}
           buyers={buyers}
           onPick={handleBuyerSelected}
-          onFetchGstin={fetchGstinDetails}
-          fetchState={gstinFetch}
+          onFetch={(data) => {
+            const g = billTo.gstin.trim().toUpperCase()
+            const next: BillTo = {
+              gstin: g,
+              lglNm: data.lglNm || billTo.lglNm,
+              addr1: data.addr1 || billTo.addr1,
+              addr2: data.addr2 ?? billTo.addr2,
+              loc: data.loc || billTo.loc,
+              pin: data.pin || billTo.pin,
+              stcd: data.stcd || billTo.stcd,
+              pos: data.pos || data.stcd || billTo.pos,
+              ph: billTo.ph,
+              em: billTo.em,
+            }
+            setBillTo(next)
+            setBuyerId(undefined)
+            if (shipSame) setShipTo(shipFromBillTo(next))
+            setBillToSnapshot({ lglNm: next.lglNm, addr1: next.addr1, addr2: next.addr2, loc: next.loc, pin: next.pin, stcd: next.stcd })
+          }}
+          onCityResolved={(pin, city) => {
+            setBillTo((prev) => {
+              if (prev.pin !== pin) return prev
+              const next = { ...prev, loc: city }
+              if (shipSame) setShipTo(shipFromBillTo(next))
+              return next
+            })
+          }}
           onClear={() => {
             setBillTo({ gstin: '', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, pos: '09', stcd: '09' })
             setBuyerId(undefined)
             setBillToSnapshot(null)
-            setGstinFetch({ loading: false, error: null, cached: false })
             if (shipSame) setShipTo({ gstin: '', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
           }}
         />
@@ -587,22 +580,17 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
 }
 
 function BillToSection({
-  billTo, onChange, buyers, onPick, onFetchGstin, fetchState, onClear,
+  billTo, onChange, buyers, onPick, onFetch, onCityResolved, onClear,
 }: {
   billTo: BillTo
   onChange: (patch: Partial<BillTo>) => void
   buyers: Buyer[]
   onPick: (b: Buyer) => void
-  onFetchGstin: () => void
-  fetchState: { loading: boolean; error: string | null; cached: boolean }
+  onFetch: (data: Partial<BillTo> & { tradeNam?: string | null; status?: string | null }) => void
+  onCityResolved: (pin: number, city: string) => void
   onClear: () => void
 }) {
-  const gstinFormatOk = validateGstin(billTo.gstin, { required: true }) === null
-  const fetchHint = fetchState.loading
-    ? 'Looking up…'
-    : fetchState.cached
-      ? 'Auto-filled (cached)'
-      : null
+  const fetch = useGstinFetch(billTo.gstin, onFetch)
   const [armed, setArmed] = useState(false)
   const hasContent = !!(billTo.gstin || billTo.lglNm || billTo.addr1 || billTo.loc || billTo.pin)
   return (
@@ -631,7 +619,7 @@ function BillToSection({
             onPick={onPick}
           />
         </Field>
-        <Field label="GSTIN" error={fetchState.error ?? validateGstin(billTo.gstin, { required: true })} hint={fetchHint}>
+        <Field label="GSTIN" error={fetch.error ?? validateGstin(billTo.gstin, { required: true })} hint={fetch.hint}>
           <div className="flex gap-2">
             <div className="flex-1 min-w-0">
               <ClientSuggest
@@ -644,14 +632,7 @@ function BillToSection({
                 transform={(v) => v.toUpperCase()}
               />
             </div>
-            <button
-              type="button"
-              onClick={onFetchGstin}
-              disabled={!gstinFormatOk || fetchState.loading}
-              className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
-            >
-              {fetchState.loading ? '…' : 'Fetch'}
-            </button>
+            <FetchButton onClick={fetch.fetch} loading={fetch.loading} disabled={fetch.fetchDisabled} />
           </div>
         </Field>
         <Field label="Address" error={requireText(billTo.addr1)}>
@@ -663,15 +644,10 @@ function BillToSection({
             <input className={inp} value={billTo.loc} onChange={(e) => onChange({ loc: e.target.value })} />
           </Field>
           <Field label="PIN" error={validatePin(billTo.pin, { required: true })}>
-            <input
-              className={inp}
-              inputMode="numeric"
-              maxLength={6}
-              value={billTo.pin ? String(billTo.pin) : ''}
-              onChange={(e) => {
-                const d = onlyDigits(e.target.value, 6)
-                onChange({ pin: d ? Number(d) : 0 })
-              }}
+            <PinInput
+              value={billTo.pin}
+              onPinChange={(pin, stcd) => onChange({ pin, ...(stcd ? { stcd, pos: stcd } : {}) })}
+              onCityResolved={onCityResolved}
             />
           </Field>
           <Field label="State (Stcd)" error={validateStcd(billTo.stcd)} hint={stcdName(billTo.stcd)}>
@@ -773,48 +749,23 @@ function ShipToSection({
     (shipTo.gstin && shipTo.gstin !== 'URP') || shipTo.lglNm || shipTo.addr1 || shipTo.loc || shipTo.pin
   )
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (!city) return
-        if (shipToRef.current.pin !== pin) return
-        onChange({ ...shipToRef.current, loc: city })
-      })
-    }
-  }
 
-  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
-    { loading: false, error: null, cached: false },
+  const shipFetch = useGstinFetch(
+    shipTo.gstin === 'URP' ? '' : shipTo.gstin,
+    (data) => {
+      const g = shipTo.gstin.trim().toUpperCase()
+      const merged = {
+        lglNm: data.lglNm || shipTo.lglNm,
+        addr1: [data.addr1, data.addr2].filter(Boolean).join(' '),
+        addr2: undefined as undefined,
+        loc: data.loc || shipTo.loc,
+        pin: data.pin || shipTo.pin,
+        stcd: data.stcd || shipTo.stcd,
+      }
+      onChange({ ...shipTo, gstin: g, ...merged })
+      onFetchSuccess(merged)
+    },
   )
-
-  const gstinFormatOk = validateGstin(shipTo.gstin, { required: true }) === null  // URP fails → button disabled ✓
-
-  const fetchGstinDetails = async () => {
-    const g = shipTo.gstin.trim().toUpperCase()
-    if (validateGstin(g, { required: true }) !== null) return          // guard: URP / invalid → no-op
-    setGstinFetch({ loading: true, error: null, cached: false })
-    const r = await lookupGstin(g)
-    if (!r.ok) {
-      setGstinFetch({ loading: false, error: r.error, cached: false })
-      return
-    }
-    setGstinFetch({ loading: false, error: null, cached: r.cached })
-    const d = r.data
-    const merged = {
-      lglNm: d.lglNm || shipTo.lglNm,
-      addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),
-      addr2: undefined,
-      loc: d.loc || shipTo.loc,
-      pin: d.pin || shipTo.pin,
-      stcd: d.stcd || shipTo.stcd,
-    }
-    onChange({ ...shipTo, gstin: g, ...merged })
-    onFetchSuccess(merged)
-  }
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
@@ -824,7 +775,7 @@ function ShipToSection({
           armed ? (
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setArmed(false)} className="text-[11px] text-slate-500 px-2 py-1">Cancel</button>
-              <button type="button" onClick={() => { onClear(); setArmed(false); setGstinFetch({ loading: false, error: null, cached: false }) }} className="text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1">Confirm clear</button>
+              <button type="button" onClick={() => { onClear(); setArmed(false) }} className="text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1">Confirm clear</button>
             </div>
           ) : (
             <button type="button" onClick={() => setArmed(true)} className="text-[11px] text-slate-500 underline">Clear</button>
@@ -845,15 +796,15 @@ function ShipToSection({
           {/* GSTIN full-width with Fetch button */}
           <Field
             label="GSTIN"
-            error={gstinFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
-            hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : shipTo.gstin === 'URP' ? 'Leave blank if buyer has no GSTIN' : null}
+            error={shipFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
+            hint={shipFetch.hint ?? (shipTo.gstin === 'URP' ? 'Leave blank if buyer has no GSTIN' : null)}
           >
             <div className="flex gap-2">
               <div className="flex-1 min-w-0">
                 <ClientSuggest
                   value={shipTo.gstin === 'URP' ? '' : shipTo.gstin}
                   onChange={(v) => {
-                    if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
+                    if (shipFetch.error) shipFetch.clearError()
                     set('gstin', v.toUpperCase() || 'URP')
                   }}
                   buyers={buyers}
@@ -863,14 +814,7 @@ function ShipToSection({
                   transform={(v) => v.toUpperCase()}
                 />
               </div>
-              <button
-                type="button"
-                onClick={fetchGstinDetails}
-                disabled={!gstinFormatOk || gstinFetch.loading}
-                className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
-              >
-                {gstinFetch.loading ? '…' : 'Fetch'}
-              </button>
+              <FetchButton onClick={shipFetch.fetch} loading={shipFetch.loading} disabled={shipFetch.fetchDisabled} />
             </div>
           </Field>
           <Field label="Legal Name" error={requireText(shipTo.lglNm)}>
@@ -903,12 +847,10 @@ function ShipToSection({
               <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
             </Field>
             <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
-              <input
-                className={inp}
-                inputMode="numeric"
-                maxLength={6}
-                value={shipTo.pin ? String(shipTo.pin) : ''}
-                onChange={(e) => setPin(e.target.value)}
+              <PinInput
+                value={shipTo.pin}
+                onPinChange={(pin, stcd) => onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })}
+                onCityResolved={(_pin, city) => onChange({ ...shipToRef.current, loc: city })}
               />
             </Field>
             <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
@@ -1405,19 +1347,7 @@ function EwbSection({
   )
 }
 
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
 const miniInp = 'w-full border border-slate-200 rounded px-2 py-1 text-sm'
-
-function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-[11px] font-medium text-slate-500 mb-0.5">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  )
-}
 
 function Mini({ label, children }: { label: string; children: React.ReactNode }) {
   return (

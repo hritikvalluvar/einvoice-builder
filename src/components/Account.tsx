@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react'
 import { useStore, type Member } from '../store'
 import { supabase } from '../supabase'
 import type { Seller } from '../types'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
-import { fetchCityFromPin } from '../pincode'
-import { lookupGstin } from '../gstinLookup'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, stcdName } from '../validators'
+import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
 
 export function Account() {
   const { userEmail, company, seller, setSeller, listMembers, removeMember } = useStore()
@@ -13,44 +12,22 @@ export function Account() {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [savingMsg, setSavingMsg] = useState('')
-  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
-    { loading: false, error: null, cached: false },
-  )
 
   const set = <K extends keyof Seller>(k: K, v: Seller[K]) => setS((x) => ({ ...x, [k]: v }))
 
-  const sellerGstinOk = validateGstin(s.gstin, { required: true }) === null
-  const fetchSellerGstin = async () => {
-    const g = s.gstin.trim().toUpperCase()
-    if (!sellerGstinOk) return
-    setGstinFetch({ loading: true, error: null, cached: false })
-    const r = await lookupGstin(g)
-    if (!r.ok) { setGstinFetch({ loading: false, error: r.error, cached: false }); return }
-    setGstinFetch({ loading: false, error: null, cached: r.cached })
-    const d = r.data
+  const sellerFetch = useGstinFetch(s.gstin, (data) => {
     setS((prev) => ({
       ...prev,
-      gstin: g,
-      lglNm: d.lglNm || prev.lglNm,
-      addr1: d.addr1 || prev.addr1,
-      addr2: d.addr2 ?? prev.addr2,
-      loc: d.loc || prev.loc,
-      pin: d.pin || prev.pin,
-      stcd: d.stcd || prev.stcd,
+      gstin: s.gstin.trim().toUpperCase(),
+      lglNm: data.lglNm || prev.lglNm,
+      addr1: data.addr1 || prev.addr1,
+      addr2: data.addr2 ?? prev.addr2,
+      loc: data.loc || prev.loc,
+      pin: data.pin || prev.pin,
+      stcd: data.stcd || prev.stcd,
     }))
-  }
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    setS((x) => ({ ...x, pin, ...(stcd ? { stcd } : {}) }))
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (!city) return
-        setS((x) => (x.pin === pin ? { ...x, loc: city } : x))
-      })
-    }
-  }
+  })
+
   const myRole = members.find((m) => m.email === userEmail)?.role
   const isOwner = myRole === 'owner'
 
@@ -144,22 +121,15 @@ export function Account() {
             <Field label="Legal name" error={requireText(s.lglNm)}>
               <input className={inp} value={s.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
             </Field>
-            <Field label="GSTIN" error={gstinFetch.error ?? validateGstin(s.gstin, { required: true })} hint={gstinFetch.cached ? 'Auto-filled (cached)' : null}>
+            <Field label="GSTIN" error={sellerFetch.error ?? validateGstin(s.gstin, { required: true })} hint={sellerFetch.hint}>
               <div className="flex gap-2">
                 <input
                   className={`${inp} flex-1`}
                   value={s.gstin}
-                  onChange={(e) => { set('gstin', e.target.value.toUpperCase()); if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false }) }}
+                  onChange={(e) => { set('gstin', e.target.value.toUpperCase()); if (sellerFetch.error) sellerFetch.clearError() }}
                   maxLength={15}
                 />
-                <button
-                  type="button"
-                  onClick={fetchSellerGstin}
-                  disabled={!sellerGstinOk || gstinFetch.loading}
-                  className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
-                >
-                  {gstinFetch.loading ? '…' : 'Fetch'}
-                </button>
+                <FetchButton onClick={sellerFetch.fetch} loading={sellerFetch.loading} disabled={sellerFetch.fetchDisabled} />
               </div>
             </Field>
             <Field label="Address line 1" error={requireText(s.addr1)}>
@@ -171,12 +141,10 @@ export function Account() {
             </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="PIN" error={validatePin(s.pin, { required: true })}>
-                <input
-                  className={inp}
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={s.pin ? String(s.pin) : ''}
-                  onChange={(e) => setPin(e.target.value)}
+                <PinInput
+                  value={s.pin}
+                  onPinChange={(pin, stcd) => setS((x) => ({ ...x, pin, ...(stcd ? { stcd } : {}) }))}
+                  onCityResolved={(pin, city) => setS((prev) => prev.pin === pin ? { ...prev, loc: city } : prev)}
                 />
               </Field>
               <Field label="State code" error={validateStcd(s.stcd)} hint={stcdName(s.stcd)}>
@@ -220,15 +188,3 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   )
 }
 
-function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-[11px] font-medium text-slate-500 mb-0.5">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  )
-}
-
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'

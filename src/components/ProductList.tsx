@@ -4,6 +4,7 @@ import type { Product } from '../types'
 import { UQC_CODES } from '../uqc'
 import { validateHsn, onlyDigits } from '../validators'
 import { HsnPackModal } from './HsnPackModal'
+import { Field, inp } from './fields'
 
 export function ProductList() {
   const { products, upsertProduct, deleteProduct } = useStore()
@@ -213,14 +214,3 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
   )
 }
 
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
-
-function Field({ label, error, children }: { label: string; error?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-    </label>
-  )
-}

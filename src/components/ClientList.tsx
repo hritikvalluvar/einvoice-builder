@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Buyer } from '../types'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
-import { fetchCityFromPin } from '../pincode'
-import { lookupGstin } from '../gstinLookup'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, stcdName } from '../validators'
+import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
 
 export function ClientList() {
   const { buyers, upsertBuyer, deleteBuyer } = useStore()
@@ -141,44 +140,21 @@ export function ClientList() {
 
 function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buyer) => void; onCancel: () => void }) {
   const [b, setB] = useState<Buyer>(buyer)
-  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
-    { loading: false, error: null, cached: false },
-  )
   const set = <K extends keyof Buyer>(k: K, v: Buyer[K]) => setB((x) => ({ ...x, [k]: v }))
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    setB((x) => ({ ...x, pin, ...(stcd ? { stcd, pos: stcd } : {}) }))
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (!city) return
-        setB((x) => (x.pin === pin ? { ...x, loc: city } : x))
-      })
-    }
-  }
 
-  const gstinFormatOk = validateGstin(b.gstin, { required: true }) === null
-  const fetchGstinDetails = async () => {
-    const g = b.gstin.trim().toUpperCase()
-    if (!gstinFormatOk) return
-    setGstinFetch({ loading: true, error: null, cached: false })
-    const r = await lookupGstin(g)
-    if (!r.ok) { setGstinFetch({ loading: false, error: r.error, cached: false }); return }
-    setGstinFetch({ loading: false, error: null, cached: r.cached })
-    const d = r.data
+  const buyerFetch = useGstinFetch(b.gstin, (data) => {
     setB((x) => ({
       ...x,
-      gstin: g,
-      lglNm: d.lglNm || x.lglNm,
-      addr1: d.addr1 || x.addr1,
-      addr2: d.addr2 ?? x.addr2,
-      loc: d.loc || x.loc,
-      pin: d.pin || x.pin,
-      stcd: d.stcd || x.stcd,
-      pos: d.stcd || x.pos,
+      gstin: b.gstin.trim().toUpperCase(),
+      lglNm: data.lglNm || x.lglNm,
+      addr1: data.addr1 || x.addr1,
+      addr2: data.addr2 ?? x.addr2,
+      loc: data.loc || x.loc,
+      pin: data.pin || x.pin,
+      stcd: data.stcd || x.stcd,
+      pos: data.stcd || x.pos,
     }))
-  }
+  })
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -189,27 +165,20 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
         <Field
           label="GSTIN"
-          error={gstinFetch.error ?? validateGstin(b.gstin, { required: true })}
-          hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
+          error={buyerFetch.error ?? validateGstin(b.gstin, { required: true })}
+          hint={buyerFetch.hint}
         >
           <div className="flex gap-2">
             <input
               className={`${inp} flex-1 min-w-0`}
               value={b.gstin}
               onChange={(e) => {
-                if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
+                if (buyerFetch.error) buyerFetch.clearError()
                 set('gstin', e.target.value.toUpperCase())
               }}
               maxLength={15}
             />
-            <button
-              type="button"
-              onClick={fetchGstinDetails}
-              disabled={!gstinFormatOk || gstinFetch.loading}
-              className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
-            >
-              {gstinFetch.loading ? '…' : 'Fetch'}
-            </button>
+            <FetchButton onClick={buyerFetch.fetch} loading={buyerFetch.loading} disabled={buyerFetch.fetchDisabled} />
           </div>
         </Field>
         <Field label="Legal name" error={requireText(b.lglNm)}>
@@ -223,12 +192,10 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
           <input className={inp} value={b.loc} onChange={(e) => set('loc', e.target.value)} />
         </Field>
         <Field label="PIN" error={validatePin(b.pin, { required: true })}>
-          <input
-            className={inp}
-            inputMode="numeric"
-            maxLength={6}
-            value={b.pin ? String(b.pin) : ''}
-            onChange={(e) => setPin(e.target.value)}
+          <PinInput
+            value={b.pin}
+            onPinChange={(pin, stcd) => setB((x) => ({ ...x, pin, ...(stcd ? { stcd, pos: stcd } : {}) }))}
+            onCityResolved={(pin, city) => setB((prev) => prev.pin === pin ? { ...prev, loc: city } : prev)}
           />
         </Field>
         <div className="grid grid-cols-2 gap-3">
@@ -254,15 +221,3 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
   )
 }
 
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
-
-function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  )
-}
