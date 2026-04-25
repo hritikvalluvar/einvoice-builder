@@ -7,6 +7,7 @@ import { validateGstin, validatePin, validatePhone, validateEmail, requireText, 
 import { fetchCityFromPin } from '../pincode'
 import { normGstin } from '../normalize'
 import { lookupGstin, checkGstinStatus } from '../gstinLookup'
+import { suggestNextDocNo } from '../invoiceNumber'
 
 type Props = {
   invoiceId?: string
@@ -23,7 +24,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
   }, [])
 
-  const [docNo, setDocNo] = useState(existing?.docNo ?? '')
+  const [docNo, setDocNo] = useState(existing?.docNo ?? suggestNextDocNo(invoices))
   const [docDt, setDocDt] = useState(existing?.docDt ?? today)
   const [buyerId, setBuyerId] = useState<string | undefined>(existing?.buyerId)
   const [billTo, setBillTo] = useState<BillTo>(
@@ -316,6 +317,13 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onPick={handleBuyerSelected}
           onFetchGstin={fetchGstinDetails}
           fetchState={gstinFetch}
+          onClear={() => {
+            setBillTo({ gstin: '', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, pos: '09', stcd: '09' })
+            setBuyerId(undefined)
+            setBillToSnapshot(null)
+            setGstinFetch({ loading: false, error: null, cached: false })
+            if (shipSame) setShipTo({ gstin: '', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+          }}
         />
 
         <ShipToSection
@@ -328,6 +336,10 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           }}
           onChange={setShipTo}
           onFetchSuccess={(fetched) => setShipToSnapshot(fetched)}
+          onClear={() => {
+            setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+            setShipToSnapshot(null)
+          }}
           buyers={buyers}
           onPick={(b) => {
             const s: ShipAddress = {
@@ -461,7 +473,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
 }
 
 function BillToSection({
-  billTo, onChange, buyers, onPick, onFetchGstin, fetchState,
+  billTo, onChange, buyers, onPick, onFetchGstin, fetchState, onClear,
 }: {
   billTo: BillTo
   onChange: (patch: Partial<BillTo>) => void
@@ -469,6 +481,7 @@ function BillToSection({
   onPick: (b: Buyer) => void
   onFetchGstin: () => void
   fetchState: { loading: boolean; error: string | null; cached: boolean }
+  onClear: () => void
 }) {
   const gstinFormatOk = validateGstin(billTo.gstin, { required: true }) === null
   const fetchHint = fetchState.loading
@@ -476,9 +489,23 @@ function BillToSection({
     : fetchState.cached
       ? 'Auto-filled (cached)'
       : null
+  const [armed, setArmed] = useState(false)
+  const hasContent = !!(billTo.gstin || billTo.lglNm || billTo.addr1 || billTo.loc || billTo.pin)
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
-      <label className="text-xs font-medium text-slate-500 block mb-2">Bill to</label>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-medium text-slate-500">Bill to</label>
+        {hasContent && (
+          armed ? (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setArmed(false)} className="text-[11px] text-slate-500 px-2 py-1">Cancel</button>
+              <button type="button" onClick={() => { onClear(); setArmed(false) }} className="text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1">Confirm clear</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setArmed(true)} className="text-[11px] text-slate-500 underline">Clear</button>
+          )
+        )}
+      </div>
 
       <div className="space-y-2">
         <Field label="Legal name" error={requireText(billTo.lglNm)}>
@@ -614,16 +641,23 @@ function ClientSuggest({
 }
 
 function ShipToSection({
-  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess, buyers, onPick,
+  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess, onClear, buyers, onPick,
 }: {
   shipSame: boolean
   shipTo: ShipAddress
   onToggleSame: (same: boolean) => void
   onChange: (s: ShipAddress) => void
   onFetchSuccess: (fetched: Partial<ShipAddress>) => void
+  onClear: () => void
   buyers: Buyer[]
   onPick: (b: Buyer) => void
 }) {
+  const [armed, setArmed] = useState(false)
+  const shipToRef = useRef(shipTo)
+  useEffect(() => { shipToRef.current = shipTo }, [shipTo])
+  const hasContent = !shipSame && !!(
+    (shipTo.gstin && shipTo.gstin !== 'URP') || shipTo.lglNm || shipTo.addr1 || shipTo.loc || shipTo.pin
+  )
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
   const setPin = (raw: string) => {
     const d = onlyDigits(raw, 6)
@@ -632,7 +666,9 @@ function ShipToSection({
     onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })
     if (d.length === 6) {
       fetchCityFromPin(d).then((city) => {
-        if (city) onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}), loc: city })
+        if (!city) return
+        if (shipToRef.current.pin !== pin) return
+        onChange({ ...shipToRef.current, loc: city })
       })
     }
   }
@@ -654,16 +690,6 @@ function ShipToSection({
     }
     setGstinFetch({ loading: false, error: null, cached: r.cached })
     const d = r.data
-    onChange({
-      ...shipTo,
-      gstin: g,
-      lglNm: d.lglNm || shipTo.lglNm,
-      addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),  // ← concatenate here
-      addr2: undefined,                                       // ← flatten, no separate addr2
-      loc: d.loc || shipTo.loc,
-      pin: d.pin || shipTo.pin,
-      stcd: d.stcd || shipTo.stcd,
-    })
     const merged = {
       lglNm: d.lglNm || shipTo.lglNm,
       addr1: [d.addr1, d.addr2].filter(Boolean).join(' '),
@@ -678,7 +704,19 @@ function ShipToSection({
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
-      <label className="text-xs font-medium text-slate-500 block mb-2">Ship to</label>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-medium text-slate-500">Ship to</label>
+        {hasContent && (
+          armed ? (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setArmed(false)} className="text-[11px] text-slate-500 px-2 py-1">Cancel</button>
+              <button type="button" onClick={() => { onClear(); setArmed(false); setGstinFetch({ loading: false, error: null, cached: false }) }} className="text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1">Confirm clear</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setArmed(true)} className="text-[11px] text-slate-500 underline">Clear</button>
+          )
+        )}
+      </div>
       <label className="flex items-center gap-2 py-2">
         <input
           type="checkbox"

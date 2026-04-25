@@ -3,6 +3,7 @@ import { useStore, newId } from '../store'
 import type { Buyer } from '../types'
 import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
 import { fetchCityFromPin } from '../pincode'
+import { lookupGstin } from '../gstinLookup'
 
 export function ClientList() {
   const { buyers, upsertBuyer, deleteBuyer } = useStore()
@@ -140,6 +141,9 @@ export function ClientList() {
 
 function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buyer) => void; onCancel: () => void }) {
   const [b, setB] = useState<Buyer>(buyer)
+  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
+    { loading: false, error: null, cached: false },
+  )
   const set = <K extends keyof Buyer>(k: K, v: Buyer[K]) => setB((x) => ({ ...x, [k]: v }))
   const setPin = (raw: string) => {
     const d = onlyDigits(raw, 6)
@@ -154,6 +158,28 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
     }
   }
 
+  const gstinFormatOk = validateGstin(b.gstin, { required: true }) === null
+  const fetchGstinDetails = async () => {
+    const g = b.gstin.trim().toUpperCase()
+    if (!gstinFormatOk) return
+    setGstinFetch({ loading: true, error: null, cached: false })
+    const r = await lookupGstin(g)
+    if (!r.ok) { setGstinFetch({ loading: false, error: r.error, cached: false }); return }
+    setGstinFetch({ loading: false, error: null, cached: r.cached })
+    const d = r.data
+    setB((x) => ({
+      ...x,
+      gstin: g,
+      lglNm: d.lglNm || x.lglNm,
+      addr1: d.addr1 || x.addr1,
+      addr2: d.addr2 ?? x.addr2,
+      loc: d.loc || x.loc,
+      pin: d.pin || x.pin,
+      stcd: d.stcd || x.stcd,
+      pos: d.stcd || x.pos,
+    }))
+  }
+
   return (
     <div className="flex flex-col h-full bg-slate-50">
       <header className="px-4 py-3 bg-slate-900 text-white flex items-center gap-3">
@@ -161,11 +187,33 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
         <h1 className="text-lg font-semibold">{buyer.lglNm ? 'Edit client' : 'New client'}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
+        <Field
+          label="GSTIN"
+          error={gstinFetch.error ?? validateGstin(b.gstin, { required: true })}
+          hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
+        >
+          <div className="flex gap-2">
+            <input
+              className={`${inp} flex-1 min-w-0`}
+              value={b.gstin}
+              onChange={(e) => {
+                if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
+                set('gstin', e.target.value.toUpperCase())
+              }}
+              maxLength={15}
+            />
+            <button
+              type="button"
+              onClick={fetchGstinDetails}
+              disabled={!gstinFormatOk || gstinFetch.loading}
+              className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
+            >
+              {gstinFetch.loading ? '…' : 'Fetch'}
+            </button>
+          </div>
+        </Field>
         <Field label="Legal name" error={requireText(b.lglNm)}>
           <input className={inp} value={b.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
-        </Field>
-        <Field label="GSTIN" error={validateGstin(b.gstin, { required: true })}>
-          <input className={inp} value={b.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
         </Field>
         <Field label="Address line 1" error={requireText(b.addr1)}>
           <input className={inp} value={b.addr1} onChange={(e) => set('addr1', e.target.value)} />

@@ -3,6 +3,7 @@ import { useStore, newId } from '../store'
 import type { Product } from '../types'
 import { UQC_CODES } from '../uqc'
 import { validateHsn, onlyDigits } from '../validators'
+import { HsnPackModal } from './HsnPackModal'
 
 export function ProductList() {
   const { products, upsertProduct, deleteProduct } = useStore()
@@ -10,6 +11,7 @@ export function ProductList() {
   const [q, setQ] = useState('')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [packsOpen, setPacksOpen] = useState(false)
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -76,6 +78,12 @@ export function ProductList() {
             className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-base"
           />
           <button
+            onClick={() => setPacksOpen(true)}
+            className="px-3 py-2 rounded-lg bg-white text-slate-700 border border-slate-300 text-sm font-medium"
+          >
+            Packs
+          </button>
+          <button
             onClick={() => setEditing({ id: newId(), prdDesc: '', hsnCd: '', unit: 'PCS', defaultPrice: 0, gstRt: 18 })}
             className="px-4 py-2 rounded-lg bg-slate-900 text-white font-medium"
           >
@@ -134,6 +142,8 @@ export function ProductList() {
           </button>
         </div>
       )}
+
+      {packsOpen && <HsnPackModal onClose={() => setPacksOpen(false)} />}
     </div>
   )
 }

@@ -7,9 +7,13 @@ drop function if exists list_members(uuid) cascade;
 drop function if exists remove_member(uuid, uuid) cascade;
 drop function if exists create_company(text) cascade;
 drop function if exists join_company(text) cascade;
+drop function if exists import_hsn_pack(uuid, uuid) cascade;
+drop function if exists gstin_claim_info(text) cascade;
 drop function if exists is_owner(uuid) cascade;
 drop function if exists is_member(uuid) cascade;
 
+drop table if exists hsn_pack_items cascade;
+drop table if exists hsn_packs cascade;
 drop table if exists invoices cascade;
 drop table if exists products cascade;
 drop table if exists buyers cascade;
@@ -112,6 +116,31 @@ create table gstin_cache (
   fetched_at  timestamptz not null default now()
 );
 
+-- HSN packs (curated starter sets per vertical — populated by admin via SQL,
+-- not via app UI; data lives in DB only, never in the codebase).
+create table hsn_packs (
+  id          uuid primary key default gen_random_uuid(),
+  slug        text unique not null,
+  name        text not null,
+  description text,
+  vertical    text,
+  created_at  timestamptz default now()
+);
+
+create table hsn_pack_items (
+  id            uuid primary key default gen_random_uuid(),
+  pack_id       uuid not null references hsn_packs on delete cascade,
+  hsn_cd        text not null,
+  name          text not null,
+  unit          text default 'NOS',
+  default_price numeric default 0,
+  gst_rt        numeric default 18,
+  sort_order    integer default 0,
+  created_at    timestamptz default now()
+);
+
+create index hsn_pack_items_pack_idx on hsn_pack_items(pack_id);
+
 -- ============ HELPERS ============
 
 create or replace function is_member(co uuid)
@@ -135,6 +164,8 @@ alter table buyers        enable row level security;
 alter table products      enable row level security;
 alter table invoices      enable row level security;
 alter table gstin_cache   enable row level security;
+alter table hsn_packs       enable row level security;
+alter table hsn_pack_items  enable row level security;
 
 create policy "companies_read"      on companies    for select using (is_member(id));
 create policy "companies_update"    on companies    for update using (is_owner(id));
@@ -149,6 +180,11 @@ create policy "invoices_co"         on invoices     for all using (is_member(com
 
 -- gstin_cache: any signed-in user can read; writes happen only via service role (edge function)
 create policy "gstin_cache_read"    on gstin_cache  for select using (auth.uid() is not null);
+
+-- HSN packs: any signed-in user can read (it's a curated catalog).
+-- Writes happen only via service role (admin populates packs in DB directly).
+create policy "hsn_packs_read"      on hsn_packs      for select using (auth.uid() is not null);
+create policy "hsn_pack_items_read" on hsn_pack_items for select using (auth.uid() is not null);
 
 -- ============ RPCs ============
 
@@ -214,8 +250,30 @@ as $$
   limit 1;
 $$;
 
+-- Imports every item from an HSN pack into the caller's products for the given company.
+-- Uses SECURITY DEFINER so the insert into `products` succeeds; access control is enforced
+-- via the is_member() check below.
+create or replace function import_hsn_pack(p_company_id uuid, p_pack_id uuid)
+returns integer language plpgsql security definer set search_path = public
+as $$
+declare
+  inserted_count integer;
+begin
+  if not is_member(p_company_id) then
+    raise exception 'Not a member of this company';
+  end if;
+  insert into products (company_id, prd_desc, hsn_cd, unit, default_price, gst_rt)
+    select p_company_id, hpi.name, hpi.hsn_cd, hpi.unit, hpi.default_price, hpi.gst_rt
+    from hsn_pack_items hpi
+    where hpi.pack_id = p_pack_id
+    order by hpi.sort_order, hpi.created_at;
+  get diagnostics inserted_count = row_count;
+  return inserted_count;
+end $$;
+
 grant execute on function create_company(text)       to authenticated;
 grant execute on function join_company(text)         to authenticated;
 grant execute on function list_members(uuid)         to authenticated;
 grant execute on function remove_member(uuid, uuid)  to authenticated;
 grant execute on function gstin_claim_info(text)     to authenticated;
+grant execute on function import_hsn_pack(uuid, uuid) to authenticated;
