@@ -941,6 +941,8 @@ function ItemRow({
   onRemove: () => void
 }) {
   const hsnError = validateHsn(item.hsnCd, { required: true })
+  const [totalEdit, setTotalEdit] = useState('')
+  const [editingTotal, setEditingTotal] = useState(false)
   return (
     <div className="border border-slate-200 rounded-lg p-2">
       <div className="flex items-center gap-2">
@@ -1003,7 +1005,7 @@ function ItemRow({
         <Mini label="Unit">
           <select value={item.unit} onChange={(e) => onUpdate({ unit: e.target.value })} className={miniInp}>
             {UQC_CODES.map((u) => (
-              <option key={u.code} value={u.code}>{u.code}</option>
+              <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
             ))}
           </select>
         </Mini>
@@ -1037,14 +1039,16 @@ function ItemRow({
         <label className="flex items-center gap-1 text-slate-900 font-medium">
           <span>Total ₹</span>
           <input
-            key={Number.isFinite(total) ? total.toFixed(2) : '0'}
             type="number"
             inputMode="decimal"
             step="any"
-            defaultValue={total || ''}
-            onBlur={(e) => {
+            value={editingTotal ? totalEdit : (total || '')}
+            onFocus={() => { setEditingTotal(true); setTotalEdit(total > 0 ? String(total) : '') }}
+            onBlur={() => setEditingTotal(false)}
+            onChange={(e) => {
+              setTotalEdit(e.target.value)
               const newTotal = Number(e.target.value)
-              if (!(item.qty > 0)) return
+              if (!(item.qty > 0) || !(newTotal > 0)) return
               const newTaxable = Math.round(newTotal / (1 + item.gstRt / 100) * 100) / 100
               onUpdate({ unitPrice: Math.round(newTaxable / item.qty * 100) / 100, discount: 0 })
             }}
