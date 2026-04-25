@@ -4,6 +4,7 @@ import { supabase } from '../supabase'
 import type { Seller } from '../types'
 import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
 import { fetchCityFromPin } from '../pincode'
+import { lookupGstin } from '../gstinLookup'
 
 export function Account() {
   const { userEmail, company, seller, setSeller, listMembers, removeMember } = useStore()
@@ -12,8 +13,32 @@ export function Account() {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [savingMsg, setSavingMsg] = useState('')
+  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
+    { loading: false, error: null, cached: false },
+  )
 
   const set = <K extends keyof Seller>(k: K, v: Seller[K]) => setS((x) => ({ ...x, [k]: v }))
+
+  const sellerGstinOk = validateGstin(s.gstin, { required: true }) === null
+  const fetchSellerGstin = async () => {
+    const g = s.gstin.trim().toUpperCase()
+    if (!sellerGstinOk) return
+    setGstinFetch({ loading: true, error: null, cached: false })
+    const r = await lookupGstin(g)
+    if (!r.ok) { setGstinFetch({ loading: false, error: r.error, cached: false }); return }
+    setGstinFetch({ loading: false, error: null, cached: r.cached })
+    const d = r.data
+    setS((prev) => ({
+      ...prev,
+      gstin: g,
+      lglNm: d.lglNm || prev.lglNm,
+      addr1: d.addr1 || prev.addr1,
+      addr2: d.addr2 ?? prev.addr2,
+      loc: d.loc || prev.loc,
+      pin: d.pin || prev.pin,
+      stcd: d.stcd || prev.stcd,
+    }))
+  }
   const setPin = (raw: string) => {
     const d = onlyDigits(raw, 6)
     const pin = d ? Number(d) : 0
@@ -119,8 +144,23 @@ export function Account() {
             <Field label="Legal name" error={requireText(s.lglNm)}>
               <input className={inp} value={s.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
             </Field>
-            <Field label="GSTIN" error={validateGstin(s.gstin, { required: true })}>
-              <input className={inp} value={s.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
+            <Field label="GSTIN" error={gstinFetch.error ?? validateGstin(s.gstin, { required: true })} hint={gstinFetch.cached ? 'Auto-filled (cached)' : null}>
+              <div className="flex gap-2">
+                <input
+                  className={`${inp} flex-1`}
+                  value={s.gstin}
+                  onChange={(e) => { set('gstin', e.target.value.toUpperCase()); if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false }) }}
+                  maxLength={15}
+                />
+                <button
+                  type="button"
+                  onClick={fetchSellerGstin}
+                  disabled={!sellerGstinOk || gstinFetch.loading}
+                  className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
+                >
+                  {gstinFetch.loading ? '…' : 'Fetch'}
+                </button>
+              </div>
             </Field>
             <Field label="Address line 1" error={requireText(s.addr1)}>
               <input className={inp} value={s.addr1} onChange={(e) => set('addr1', e.target.value)} />

@@ -48,6 +48,8 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const [shipToSnapshot, setShipToSnapshot] = useState<Partial<ShipAddress> | null>(null)
   const [pendingAction, setPendingAction] = useState<'save' | 'export' | null>(null)
   const [statusWarn, setStatusWarn] = useState<string | null>(null)
+  const [statusWarnAction, setStatusWarnAction] = useState<'save' | 'export'>('export')
+  const [reviewAction, setReviewAction] = useState<'save' | 'export' | null>(null)
 
   const fetchGstinDetails = async () => {
     const g = billTo.gstin.trim().toUpperCase()
@@ -162,7 +164,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setItems((arr) => arr.map((it, i) => (i === idx ? { ...it, ...patch } : it)))
   const removeItem = (idx: number) => setItems((arr) => arr.filter((_, i) => i !== idx))
 
-  const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0
+  const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0 && !validateStcd(billTo.stcd)
   // EWB is optional, but if provided, it must be valid
   const ewbValid = !ewb || (
     (!!ewb.vehNo?.trim() || !!ewb.transId?.trim()) &&
@@ -183,6 +185,30 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     (k) => String((shipTo as any)[k] ?? '') !== String((shipToSnapshot as any)[k] ?? '')
   )
   const hasFetchChanges = billToChanged || shipToChanged
+
+  const validationIssues: string[] = []
+  if (!docNo.trim()) validationIssues.push('Invoice #')
+  if (!billTo.lglNm.trim()) validationIssues.push('Buyer name')
+  if (!billTo.gstin.trim()) validationIssues.push('Buyer GSTIN')
+  if (!billTo.addr1.trim()) validationIssues.push('Buyer address')
+  if (!billTo.loc.trim()) validationIssues.push('Buyer location')
+  if (!(billTo.pin > 0)) validationIssues.push('Buyer PIN')
+  if (validateStcd(billTo.stcd)) validationIssues.push('Buyer state code')
+  if (items.length === 0) {
+    validationIssues.push('No items added')
+  } else {
+    items.forEach((it, i) => {
+      if (!it.prdDesc.trim()) validationIssues.push(`Item ${i + 1} · name`)
+      if (validateHsn(it.hsnCd, { required: true })) validationIssues.push(`Item ${i + 1} · HSN invalid`)
+      if (!(it.qty > 0)) validationIssues.push(`Item ${i + 1} · qty`)
+      if (!(it.unitPrice > 0)) validationIssues.push(`Item ${i + 1} · price`)
+    })
+  }
+  if (ewb) {
+    if (!ewb.vehNo?.trim() && !ewb.transId?.trim()) validationIssues.push('E-way · vehicle or transporter ID')
+    if (ewb.transId?.trim() && !ewb.transName?.trim()) validationIssues.push('E-way · transporter name')
+    if (ewb.transId?.trim() && ewb.transId.trim().length !== 15) validationIssues.push('E-way · transporter ID (15 chars)')
+  }
 
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
@@ -261,24 +287,30 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     onDone()
   }
 
-  // ── save/export now gate through dialog if needed ──
+  // ── GSTIN status check + review gate (both save and export paths) ──
+  const triggerReview = async (action: 'save' | 'export') => {
+    if (validateGstin(billTo.gstin, { required: true }) === null) {
+      const status = await checkGstinStatus(billTo.gstin)
+      if (status !== null && status !== 'Active') {
+        setStatusWarnAction(action)
+        setStatusWarn(status)
+        return
+      }
+    }
+    setReviewAction(action)
+  }
+
+  // ── save/export gate through fetch-changes dialog → status check → review ──
   const save = () => {
     if (!canSave) return
     if (hasFetchChanges) { setPendingAction('save'); return }
-    doSave()
+    triggerReview('save')
   }
 
   const exportJson = async () => {
     if (!canSave) return
     if (hasFetchChanges) { setPendingAction('export'); return }
-    if (validateGstin(billTo.gstin, { required: true }) === null) {
-      const status = await checkGstinStatus(billTo.gstin)
-      if (status !== null && status !== 'Active') {
-        setStatusWarn(status)
-        return
-      }
-    }
-    doExport()
+    await triggerReview('export')
   }
 
   return (
@@ -391,11 +423,30 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onChange={setEwb}
         />
 
+        {validationIssues.length === 0 ? (
+          <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-green-50 border border-green-200">
+            <span className="text-green-600 text-base leading-none">✓</span>
+            <span className="text-xs text-green-700 font-medium">Looks good — verify amounts before exporting.</span>
+          </div>
+        ) : (
+          <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200">
+            <p className="text-[11px] font-medium text-amber-700 mb-1">Fill in before saving:</p>
+            <ul className="space-y-0.5">
+              {validationIssues.map((msg) => (
+                <li key={msg} className="flex items-start gap-1.5 text-xs text-amber-800">
+                  <span className="shrink-0 text-amber-400 leading-[1.4]">·</span>
+                  <span>{msg}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="flex gap-2 pt-2">
           <button
             onClick={save}
             disabled={!canSave}
-            className="flex-1 py-3 rounded-xl bg-slate-200 text-slate-900 font-medium disabled:opacity-50 active:scale-95 transition"
+            className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium disabled:opacity-50 active:scale-95 transition"
           >
             Save draft
           </button>
@@ -429,10 +480,9 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
               </button>
               <button
                 onClick={() => {
-                  const action = pendingAction
+                  const action = pendingAction!
                   setPendingAction(null)
-                  if (action === 'save') doSave()
-                  else doExport()
+                  triggerReview(action)
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
               >
@@ -459,10 +509,74 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
                 Go back
               </button>
               <button
-                onClick={() => { setStatusWarn(null); doExport() }}
+                onClick={() => { setStatusWarn(null); setReviewAction(statusWarnAction) }}
                 className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-medium active:scale-95 transition"
               >
-                Export anyway
+                {statusWarnAction === 'save' ? 'Save anyway' : 'Export anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── pre-save/export review overlay ── */}
+      {reviewAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-4">
+            <h2 className="text-base font-semibold text-slate-900">Review before {reviewAction === 'save' ? 'saving' : 'exporting'}</h2>
+
+            <div className="space-y-0.5">
+              <div className="text-sm font-medium text-slate-900">#{docNo} · {docDt}</div>
+              <div className="text-sm text-slate-500 truncate">{billTo.lglNm || '—'}</div>
+              <div className="text-xs text-slate-400">{items.length} item{items.length !== 1 ? 's' : ''}</div>
+            </div>
+
+            <dl className="text-sm border-t border-slate-100 pt-3 space-y-1.5">
+              <div className="flex justify-between text-slate-600">
+                <dt>Taxable value</dt>
+                <dd>₹{summary.assVal.toFixed(2)}</dd>
+              </div>
+              {isIntra ? (
+                <>
+                  <div className="flex justify-between text-slate-600">
+                    <dt>CGST</dt>
+                    <dd>₹{summary.cgstVal.toFixed(2)}</dd>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <dt>SGST</dt>
+                    <dd>₹{summary.sgstVal.toFixed(2)}</dd>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-slate-600">
+                  <dt>IGST</dt>
+                  <dd>₹{summary.igstVal.toFixed(2)}</dd>
+                </div>
+              )}
+              {summary.rndOffAmt !== 0 && (
+                <div className="flex justify-between font-medium text-amber-600">
+                  <dt>Round-off</dt>
+                  <dd>{summary.rndOffAmt > 0 ? '+' : ''}₹{summary.rndOffAmt.toFixed(2)}</dd>
+                </div>
+              )}
+              <div className="flex justify-between text-slate-900 font-semibold text-base border-t border-slate-200 pt-2 mt-1">
+                <dt>Total</dt>
+                <dd>₹{summary.totInvVal.toFixed(2)}</dd>
+              </div>
+            </dl>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setReviewAction(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => { const a = reviewAction; setReviewAction(null); a === 'save' ? doSave() : doExport() }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
+              >
+                {reviewAction === 'save' ? 'Save' : 'Export'}
               </button>
             </div>
           </div>
@@ -730,17 +844,17 @@ function ShipToSection({
         <div className="space-y-2 mt-2">
           {/* GSTIN full-width with Fetch button */}
           <Field
-            label="GSTIN (or URP)"
+            label="GSTIN"
             error={gstinFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
-            hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : null}
+            hint={gstinFetch.loading ? 'Looking up…' : gstinFetch.cached ? 'Auto-filled (cached)' : shipTo.gstin === 'URP' ? 'Leave blank if buyer has no GSTIN' : null}
           >
             <div className="flex gap-2">
               <div className="flex-1 min-w-0">
                 <ClientSuggest
-                  value={shipTo.gstin}
+                  value={shipTo.gstin === 'URP' ? '' : shipTo.gstin}
                   onChange={(v) => {
                     if (gstinFetch.error) setGstinFetch({ loading: false, error: null, cached: false })
-                    set('gstin', v.toUpperCase())
+                    set('gstin', v.toUpperCase() || 'URP')
                   }}
                   buyers={buyers}
                   matchOn="gstin"
@@ -1123,7 +1237,7 @@ function SummarySection({
         <dd className="text-right">₹{summary.rawTotal.toFixed(2)}</dd>
       </dl>
 
-      <label className="block text-xs font-medium text-slate-500 mt-4 mb-1">Final total (editable)</label>
+      <label className="block text-xs font-medium text-slate-500 mt-4 mb-1">Override total (optional)</label>
       <div className="flex gap-2">
         <input
           type="number"
@@ -1136,17 +1250,17 @@ function SummarySection({
         />
         <button
           onClick={() => setForceTotalStr(String(Math.floor(summary.rawTotal)))}
-          className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg active:bg-slate-200"
-          title="Round down"
+          className="flex flex-col items-center px-2.5 py-1.5 text-slate-700 bg-slate-100 rounded-lg active:bg-slate-200 leading-tight"
         >
-          ↓
+          <span className="text-[10px]">↓</span>
+          <span className="text-[11px] font-medium">₹{Math.floor(summary.rawTotal)}</span>
         </button>
         <button
           onClick={() => setForceTotalStr(String(Math.ceil(summary.rawTotal)))}
-          className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg active:bg-slate-200"
-          title="Round up"
+          className="flex flex-col items-center px-2.5 py-1.5 text-slate-700 bg-slate-100 rounded-lg active:bg-slate-200 leading-tight"
         >
-          ↑
+          <span className="text-[10px]">↑</span>
+          <span className="text-[11px] font-medium">₹{Math.ceil(summary.rawTotal)}</span>
         </button>
       </div>
       <div className="mt-2 text-xs text-slate-500 flex justify-between">
@@ -1154,7 +1268,7 @@ function SummarySection({
         <span>Final: <strong className="text-slate-900">₹{summary.totInvVal.toFixed(2)}</strong></span>
       </div>
       <p className="text-[11px] text-slate-400 mt-1">
-        Blank = raw ₹{summary.rawTotal.toFixed(2)}. Type any amount to force round-off (e.g. 2000.62 → 2000).
+        Leave empty to use the calculated total ₹{summary.rawTotal.toFixed(2)}, or tap a button to round.
       </p>
     </section>
   )
