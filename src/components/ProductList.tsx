@@ -181,7 +181,7 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
             </select>
           </Field>
           <Field label="GST slab %">
-            <input className={inp} type="number" inputMode="decimal" value={p.gstRt || ''} onChange={(e) => set('gstRt', Number(e.target.value))} />
+            <input className={inp} type="number" inputMode="decimal" value={p.gstRt ?? ''} onChange={(e) => set('gstRt', Number(e.target.value))} />
           </Field>
         </div>
         <div className="flex flex-wrap gap-2">

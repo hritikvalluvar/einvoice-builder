@@ -136,7 +136,6 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0 && !validateStcd(billTo.stcd)
   // EWB is optional, but if provided, it must be valid
   const ewbValid = !ewb || (
-    (!!ewb.vehNo?.trim() || !!ewb.transId?.trim()) &&
     (!ewb.transId?.trim() || !!ewb.transName?.trim()) &&
     (!ewb.transId?.trim() || ewb.transId.trim().length === 15)
   )
@@ -174,7 +173,6 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     })
   }
   if (ewb) {
-    if (!ewb.vehNo?.trim() && !ewb.transId?.trim()) validationIssues.push('E-way · vehicle or transporter ID')
     if (ewb.transId?.trim() && !ewb.transName?.trim()) validationIssues.push('E-way · transporter name')
     if (ewb.transId?.trim() && ewb.transId.trim().length !== 15) validationIssues.push('E-way · transporter ID (15 chars)')
   }
@@ -960,7 +958,7 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.qty || ''}
-            onChange={(e) => onUpdate({ qty: Number(e.target.value) })}
+            onChange={(e) => onUpdate({ qty: Number(e.target.value), discount: 0 })}
             className={`${miniInp} ${item.qty > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -970,7 +968,7 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.unitPrice || ''}
-            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value) })}
+            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value), discount: 0 })}
             className={`${miniInp} ${item.unitPrice > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -1022,8 +1020,7 @@ function ItemRow({
             onChange={(e) => {
               const newTaxable = Number(e.target.value)
               if (!(item.qty > 0)) return
-              const gross = item.qty * item.unitPrice
-              onUpdate({ discount: Math.round((gross - newTaxable) * 100) / 100 })
+              onUpdate({ unitPrice: Math.round(newTaxable / item.qty * 100) / 100, discount: 0 })
             }}
             className="w-24 border border-slate-200 rounded px-2 py-0.5 text-right"
           />
@@ -1241,7 +1238,6 @@ function EwbSection({
   const [distanceStr, setDistanceStr] = useState<string>(String(ewb?.distance ?? 0))
 
   // Validation logic
-  const partBMissing = ewb ? (!ewb.vehNo?.trim() && !ewb.transId?.trim()) : false
   const transNameMissing = ewb ? (!!ewb.transId?.trim() && !ewb.transName?.trim()) : false
   const transIdError = ewb?.transId?.trim()
     ? (ewb.transId.trim().length !== 15 ? 'Transporter ID must be exactly 15 characters' : null)
@@ -1334,13 +1330,7 @@ function EwbSection({
               />
             </Field>
           </div>
-          {/* Show a warning if both transporter ID and vehicle number are missing, as at least one is required for EWB generation. */}
-          {partBMissing && (
-            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
-              <span className="text-red-400 text-base leading-none mt-0.5">⚠</span>
-              <span>At least one of Transporter ID or Vehicle Number is required to generate the E-way bill.</span>
-            </div>
-          )}
+
         </div>
       )}
     </section>
