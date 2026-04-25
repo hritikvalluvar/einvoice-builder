@@ -958,7 +958,14 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.qty || ''}
-            onChange={(e) => onUpdate({ qty: Number(e.target.value), discount: 0 })}
+            onChange={(e) => {
+              const newQty = Number(e.target.value)
+              if (taxable > 0 && newQty > 0) {
+                onUpdate({ qty: newQty, unitPrice: Math.round(taxable / newQty * 100) / 100, discount: 0 })
+              } else {
+                onUpdate({ qty: newQty, discount: 0 })
+              }
+            }}
             className={`${miniInp} ${item.qty > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -968,7 +975,14 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.unitPrice || ''}
-            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value), discount: 0 })}
+            onChange={(e) => {
+              const newPrice = Number(e.target.value)
+              if (taxable > 0 && newPrice > 0) {
+                onUpdate({ unitPrice: newPrice, qty: Math.round(taxable / newPrice * 100) / 100, discount: 0 })
+              } else {
+                onUpdate({ unitPrice: newPrice, discount: 0 })
+              }
+            }}
             className={`${miniInp} ${item.unitPrice > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -1025,7 +1039,25 @@ function ItemRow({
             className="w-24 border border-slate-200 rounded px-2 py-0.5 text-right"
           />
         </label>
-        <span className="text-slate-900 font-medium">Total ₹{total.toFixed(2)}</span>
+        <label className="flex items-center gap-1 text-slate-900 font-medium">
+          <span>Total ₹</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="any"
+            value={Number.isFinite(total) ? total : 0}
+            onChange={(e) => {
+              const newTotal = Number(e.target.value)
+              const newTaxable = Math.round(newTotal / (1 + item.gstRt / 100) * 100) / 100
+              if (item.qty > 0) {
+                onUpdate({ unitPrice: Math.round(newTaxable / item.qty * 100) / 100, discount: 0 })
+              } else if (item.unitPrice > 0) {
+                onUpdate({ qty: Math.round(newTaxable / item.unitPrice * 100) / 100, discount: 0 })
+              }
+            }}
+            className="w-24 border border-slate-200 rounded px-2 py-0.5 text-right"
+          />
+        </label>
       </div>
     </div>
   )
