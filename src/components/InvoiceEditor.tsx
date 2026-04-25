@@ -81,6 +81,14 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const forceTotal = forceTotalStr.trim() ? Number(forceTotalStr) : undefined
   const summary = useMemo(() => summarize(lines, forceTotal), [lines, forceTotal])
 
+  const prevRawTotalRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (prevRawTotalRef.current !== null && prevRawTotalRef.current !== summary.rawTotal) {
+      setForceTotalStr('')
+    }
+    prevRawTotalRef.current = summary.rawTotal
+  }, [summary.rawTotal])
+
   const handleBuyerSelected = (b: Buyer) => {
     setBuyerId(b.id)
     const bill = billFromBuyer(b)
@@ -1016,7 +1024,7 @@ function ItemRow({
             type="number"
             inputMode="decimal"
             step="any"
-            value={Number.isFinite(taxable) ? taxable : 0}
+            value={taxable || ''}
             onChange={(e) => {
               const newTaxable = Number(e.target.value)
               if (!(item.qty > 0)) return
@@ -1033,7 +1041,7 @@ function ItemRow({
             type="number"
             inputMode="decimal"
             step="any"
-            defaultValue={Number.isFinite(total) ? total : 0}
+            defaultValue={total || ''}
             onBlur={(e) => {
               const newTotal = Number(e.target.value)
               if (!(item.qty > 0)) return
