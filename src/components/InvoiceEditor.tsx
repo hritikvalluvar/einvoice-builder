@@ -7,7 +7,7 @@ import { validateGstin, validatePin, validatePhone, validateEmail, requireText, 
 import { normGstin } from '../normalize'
 import { checkGstinStatus } from '../gstinLookup'
 import { suggestNextDocNo } from '../invoiceNumber'
-import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
+import { Field, inp, useGstinFetch, FetchButton, PinInput, UnitSelect } from './fields'
 
 type Props = {
   invoiceId?: string
@@ -1003,11 +1003,7 @@ function ItemRow({
           />
         </Mini>
         <Mini label="Unit">
-          <select value={item.unit} onChange={(e) => onUpdate({ unit: e.target.value })} className={miniInp}>
-            {UQC_CODES.map((u) => (
-              <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
-            ))}
-          </select>
+          <UnitSelect value={item.unit} onChange={(v) => onUpdate({ unit: v })} className={miniInp} />
         </Mini>
       </div>
       {hsnError && (
@@ -1149,11 +1145,7 @@ function QuickProductForm({
       </div>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Unit (UQC)">
-          <select className={inp} value={p.unit} onChange={(e) => set('unit', e.target.value)}>
-            {UQC_CODES.map((u) => (
-              <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
-            ))}
-          </select>
+          <UnitSelect value={p.unit} onChange={(v) => set('unit', v)} />
         </Field>
         <Field label="GST %"><input className={inp} type="number" inputMode="decimal" value={p.gstRt || ''} onChange={(e) => set('gstRt', Number(e.target.value))} /></Field>
       </div>

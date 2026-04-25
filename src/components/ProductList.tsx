@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Product } from '../types'
-import { UQC_CODES } from '../uqc'
 import { validateHsn, onlyDigits } from '../validators'
 import { HsnPackModal } from './HsnPackModal'
-import { Field, inp } from './fields'
+import { Field, inp, UnitSelect } from './fields'
 
 export function ProductList() {
   const { products, upsertProduct, deleteProduct } = useStore()
@@ -174,11 +173,7 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Unit (UQC)">
-            <select className={inp} value={p.unit} onChange={(e) => set('unit', e.target.value)}>
-              {UQC_CODES.map((u) => (
-                <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
-              ))}
-            </select>
+            <UnitSelect value={p.unit} onChange={(v) => set('unit', v)} />
           </Field>
           <Field label="GST slab %">
             <input className={inp} type="number" inputMode="decimal" value={p.gstRt ?? ''} onChange={(e) => set('gstRt', Number(e.target.value))} />

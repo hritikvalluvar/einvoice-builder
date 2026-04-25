@@ -3,6 +3,7 @@ import type { BillTo } from '../types'
 import { validateGstin, pinToStcd, onlyDigits } from '../validators'
 import { lookupGstin } from '../gstinLookup'
 import { fetchCityFromPin } from '../pincode'
+import { UQC_CODES } from '../uqc'
 
 // ── Shared input class ──────────────────────────────────────────────────────
 export const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
@@ -138,5 +139,33 @@ export function PinInput({
       onChange={handleChange}
       className={className ?? inp}
     />
+  )
+}
+
+// ── UnitSelect ────────────────────────────────────────────────────────────────
+// Shows just the code when selected; shows code + label in the picker list.
+export function UnitSelect({
+  value,
+  onChange,
+  className,
+}: {
+  value: string
+  onChange: (v: string) => void
+  className?: string
+}) {
+  return (
+    <div className={`relative ${className ?? inp}`}>
+      <span className="block pointer-events-none">{value}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+        aria-label="Unit"
+      >
+        {UQC_CODES.map((u) => (
+          <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
+        ))}
+      </select>
+    </div>
   )
 }
