@@ -8,6 +8,12 @@ import { normGstin } from '../normalize'
 import { checkGstinStatus } from '../gstinLookup'
 import { suggestNextDocNo } from '../invoiceNumber'
 import { Field, inp, useGstinFetch, FetchButton, PinInput, UnitSelect } from './fields'
+import { amountInWords } from '../amountWords'
+
+const MAX_QTY = 99_999
+const MAX_PRICE = 99_99_999   // ₹99.99 lakh per unit
+const MAX_TAXABLE = 99_99_999 // ₹99.99 lakh per line
+const MAX_TOTAL = 99_99_999
 
 type Props = {
   invoiceId?: string
@@ -564,6 +570,10 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
               </div>
             </dl>
 
+            <p className="text-[11px] text-slate-500 italic leading-snug">
+              {amountInWords(summary.totInvVal)}
+            </p>
+
             <div className="flex gap-2 pt-1">
               <button
                 onClick={() => setReviewAction(null)}
@@ -968,7 +978,8 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.qty || ''}
-            onChange={(e) => onUpdate({ qty: Number(e.target.value), discount: 0 })}
+            max={MAX_QTY}
+            onChange={(e) => onUpdate({ qty: Math.min(Number(e.target.value), MAX_QTY), discount: 0 })}
             className={`${miniInp} ${item.qty > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -978,7 +989,8 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.unitPrice || ''}
-            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value), discount: 0 })}
+            max={MAX_PRICE}
+            onChange={(e) => onUpdate({ unitPrice: Math.min(Number(e.target.value), MAX_PRICE), discount: 0 })}
             className={`${miniInp} ${item.unitPrice > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -1024,7 +1036,7 @@ function ItemRow({
             step="any"
             value={taxable || ''}
             onChange={(e) => {
-              const newTaxable = Number(e.target.value)
+              const newTaxable = Math.min(Number(e.target.value), MAX_TAXABLE)
               if (!(item.qty > 0)) return
               const gross = item.qty * item.unitPrice
               onUpdate({ discount: Math.round((gross - newTaxable) * 100) / 100 })
@@ -1043,7 +1055,7 @@ function ItemRow({
             onBlur={() => setEditingTotal(false)}
             onChange={(e) => {
               setTotalEdit(e.target.value)
-              const newTotal = Number(e.target.value)
+              const newTotal = Math.min(Number(e.target.value), MAX_TOTAL)
               if (!(item.qty > 0) || !(newTotal > 0)) return
               const newTaxable = Math.round(newTotal / (1 + item.gstRt / 100) * 100) / 100
               onUpdate({ unitPrice: Math.round(newTaxable / item.qty * 100) / 100, discount: 0 })
