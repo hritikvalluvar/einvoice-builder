@@ -12,7 +12,7 @@ type ComputedLine = {
   unit: string
   unitPrice: number
   totAmt: number
-  discount: number
+  discount?: number
   preTaxVal: number
   assAmt: number
   gstRt: number
@@ -51,7 +51,7 @@ export function computeLines(items: InvoiceItem[], isIntra: boolean): ComputedLi
       unit: it.unit,
       unitPrice: it.unitPrice,
       totAmt,
-      discount,
+      // discount, {disabled until further required}
       preTaxVal: 0,
       assAmt,
       gstRt: it.gstRt,

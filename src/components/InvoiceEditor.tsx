@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Invoice, InvoiceItem, Buyer, Product, ShipAddress, BillTo, EwbDtls } from '../types'
 import { computeLines, summarize, toNicJson, fromDateInput, toDateInput, shipFromBillTo, billFromBuyer } from '../einvoice'
-import { UQC_CODES } from '../uqc'
 import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, stcdName, onlyDigits } from '../validators'
 import { normGstin } from '../normalize'
 import { checkGstinStatus } from '../gstinLookup'
@@ -54,7 +53,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const [statusWarnAction, setStatusWarnAction] = useState<'save' | 'export'>('export')
   const [reviewAction, setReviewAction] = useState<'save' | 'export' | null>(null)
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   const billToFetch = useGstinFetch(billTo.gstin, (data) => {
     const g = billTo.gstin.trim().toUpperCase()
     const next: BillTo = {
@@ -582,7 +581,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
                 Edit
               </button>
               <button
-                onClick={() => { const a = reviewAction; setReviewAction(null); a === 'save' ? doSave() : doExport() }}
+                onClick={() => { const a = reviewAction; setReviewAction(null); if (a === 'save') {doSave();} else { doExport(); } }}
                 className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
               >
                 {reviewAction === 'save' ? 'Save' : 'Export'}
