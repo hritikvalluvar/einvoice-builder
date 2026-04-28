@@ -204,9 +204,9 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   })
 
   // ── split actual save/export logic out so dialog can call them ──
-  const doSave = () => {
-    // on save, if GSTIN doesn't match any existing buyer, create a new buyer record so it shows up in suggestions later
-    const inv = buildInvoice()
+
+  // Resolves buyer: awaits upsert of new buyers so their FK is committed before the invoice INSERT.
+  const resolveBuyer = async (inv: Invoice): Promise<Invoice> => {
     const gstinKey = normGstin(billTo.gstin)
     const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
     if (!matched && gstinKey) {
@@ -223,38 +223,22 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
         ph: billTo.ph,
         em: billTo.em,
       }
-      upsertBuyer(newBuyer)
-      inv.buyerId = newBuyer.id
+      await upsertBuyer(newBuyer)
+      return { ...inv, buyerId: newBuyer.id }
     } else if (matched && !inv.buyerId) {
-      inv.buyerId = matched.id
+      return { ...inv, buyerId: matched.id }
     }
+    return inv
+  }
+
+  const doSave = async () => {
+    const inv = await resolveBuyer(buildInvoice())
     upsertInvoice(inv)
     onDone()
   }
 
-  const doExport = () => {
-    const inv = buildInvoice()
-    const gstinKey = normGstin(billTo.gstin)
-    const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
-    if (!matched && gstinKey) {
-      const newBuyer: Buyer = {
-        id: newId(),
-        gstin: billTo.gstin,
-        lglNm: billTo.lglNm,
-        addr1: billTo.addr1,
-        addr2: billTo.addr2,
-        loc: billTo.loc,
-        pin: billTo.pin,
-        pos: billTo.pos,
-        stcd: billTo.stcd,
-        ph: billTo.ph,
-        em: billTo.em,
-      }
-      upsertBuyer(newBuyer)
-      inv.buyerId = newBuyer.id
-    } else if (matched && !inv.buyerId) {
-      inv.buyerId = matched.id
-    }
+  const doExport = async () => {
+    const inv = await resolveBuyer(buildInvoice())
     upsertInvoice(inv)
     const payload = [toNicJson(seller, inv)]
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
