@@ -188,10 +188,11 @@ Deno.serve(async (req) => {
   const { data: { user } } = await userClient.auth.getUser()
   if (!user) return json({ ok: false, error: 'Unauthorized' }, 401)
 
-  let body: { gstin?: string } = {}
+  let body: { gstin?: string; max_age_ms?: number } = {}
   try { body = await req.json() } catch { /* fallthrough */ }
   const gstin = String(body.gstin ?? '').toUpperCase().trim()
   if (!GSTIN_RE.test(gstin)) return json({ ok: false, error: 'Invalid GSTIN format' }, 400)
+  const maxAgeMs = typeof body.max_age_ms === 'number' ? body.max_age_ms : CACHE_TTL_MS
 
   const admin = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -204,8 +205,8 @@ Deno.serve(async (req) => {
     .eq('gstin', gstin)
     .maybeSingle()
 
-  if (cached && Date.now() - new Date(cached.fetched_at).getTime() < CACHE_TTL_MS) {
-    return json({ ok: true, cached: true, data: cached.data })
+  if (cached && Date.now() - new Date(cached.fetched_at).getTime() < maxAgeMs) {
+    return json({ ok: true, cached: true, fetched_at: cached.fetched_at, data: cached.data })
   }
 
   const picked = pickProvider()
@@ -214,10 +215,11 @@ Deno.serve(async (req) => {
   try {
     const r = await picked.provider.fetch(gstin)
     if (!r.ok) return json({ ok: false, error: r.error }, 502)
+    const fetchedAt = new Date().toISOString()
     await admin
       .from('gstin_cache')
-      .upsert({ gstin, data: r.data, fetched_at: new Date().toISOString() })
-    return json({ ok: true, cached: false, data: r.data })
+      .upsert({ gstin, data: r.data, fetched_at: fetchedAt })
+    return json({ ok: true, cached: false, fetched_at: fetchedAt, data: r.data })
   } catch (e: any) {
     return json({ ok: false, error: e?.message ?? String(e) }, 502)
   }

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Product } from '../types'
-import { UQC_CODES } from '../uqc'
 import { validateHsn, onlyDigits } from '../validators'
+import { HsnPackModal } from './HsnPackModal'
+import { Field, inp, UnitSelect } from './fields'
 
 export function ProductList() {
   const { products, upsertProduct, deleteProduct } = useStore()
@@ -10,6 +11,7 @@ export function ProductList() {
   const [q, setQ] = useState('')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [packsOpen, setPacksOpen] = useState(false)
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase()
@@ -76,6 +78,12 @@ export function ProductList() {
             className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-base"
           />
           <button
+            onClick={() => setPacksOpen(true)}
+            className="px-3 py-2 rounded-lg bg-white text-slate-700 border border-slate-300 text-sm font-medium"
+          >
+            Packs
+          </button>
+          <button
             onClick={() => setEditing({ id: newId(), prdDesc: '', hsnCd: '', unit: 'PCS', defaultPrice: 0, gstRt: 18 })}
             className="px-4 py-2 rounded-lg bg-slate-900 text-white font-medium"
           >
@@ -134,6 +142,8 @@ export function ProductList() {
           </button>
         </div>
       )}
+
+      {packsOpen && <HsnPackModal onClose={() => setPacksOpen(false)} />}
     </div>
   )
 }
@@ -163,14 +173,10 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Unit (UQC)">
-            <select className={inp} value={p.unit} onChange={(e) => set('unit', e.target.value)}>
-              {UQC_CODES.map((u) => (
-                <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
-              ))}
-            </select>
+            <UnitSelect value={p.unit} onChange={(v) => set('unit', v)} />
           </Field>
           <Field label="GST slab %">
-            <input className={inp} type="number" inputMode="decimal" value={p.gstRt || ''} onChange={(e) => set('gstRt', Number(e.target.value))} />
+            <input className={inp} type="number" inputMode="decimal" value={p.gstRt ?? ''} onChange={(e) => set('gstRt', Number(e.target.value))} />
           </Field>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -203,14 +209,3 @@ function ProductForm({ product, onSave, onCancel }: { product: Product; onSave: 
   )
 }
 
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
-
-function Field({ label, error, children }: { label: string; error?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-    </label>
-  )
-}

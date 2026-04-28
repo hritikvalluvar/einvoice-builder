@@ -2,11 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Invoice, InvoiceItem, Buyer, Product, ShipAddress, BillTo, EwbDtls } from '../types'
 import { computeLines, summarize, toNicJson, fromDateInput, toDateInput, shipFromBillTo, billFromBuyer } from '../einvoice'
-import { UQC_CODES } from '../uqc'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, pinToStcd, stcdName, onlyDigits } from '../validators'
-import { fetchCityFromPin } from '../pincode'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, validateHsn, stcdName, onlyDigits } from '../validators'
 import { normGstin } from '../normalize'
-import { lookupGstin } from '../gstinLookup'
+import { checkGstinStatus } from '../gstinLookup'
+import { suggestNextDocNo } from '../invoiceNumber'
+import { Field, inp, useGstinFetch, FetchButton, PinInput, UnitSelect } from './fields'
+import { amountInWords } from '../amountWords'
+
+const MAX_QTY = 99_999
+const MAX_PRICE = 99_99_999   // ₹99.99 lakh per unit
+const MAX_TAXABLE = 99_99_999 // ₹99.99 lakh per line
+const MAX_TOTAL = 99_99_999
 
 type Props = {
   invoiceId?: string
@@ -23,7 +29,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
   }, [])
 
-  const [docNo, setDocNo] = useState(existing?.docNo ?? '')
+  const [docNo, setDocNo] = useState(existing?.docNo ?? suggestNextDocNo(invoices))
   const [docDt, setDocDt] = useState(existing?.docDt ?? today)
   const [buyerId, setBuyerId] = useState<string | undefined>(existing?.buyerId)
   const [billTo, setBillTo] = useState<BillTo>(
@@ -38,75 +44,79 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     existing?.shipTo ?? { gstin: 'URP', lglNm: '', addr1: '', loc: '', pin: 0, stcd: '09' },
   )
   const [ewb, setEwb] = useState<EwbDtls | undefined>(existing?.ewb)
-  const [gstinFetch, setGstinFetch] = useState<{ loading: boolean; error: string | null; cached: boolean }>(
-    { loading: false, error: null, cached: false },
-  )
 
-  const fetchGstinDetails = async () => {
+  // ── Snapshot tracking if user changes GST details after fetching ──
+  const [billToSnapshot, setBillToSnapshot] = useState<Partial<BillTo> | null>(null)
+  const [shipToSnapshot, setShipToSnapshot] = useState<Partial<ShipAddress> | null>(null)
+  const [pendingAction, setPendingAction] = useState<'save' | 'export' | null>(null)
+  const [statusWarn, setStatusWarn] = useState<string | null>(null)
+  const [statusWarnAction, setStatusWarnAction] = useState<'save' | 'export'>('export')
+  const [reviewAction, setReviewAction] = useState<'save' | 'export' | null>(null)
+
+   
+  const billToFetch = useGstinFetch(billTo.gstin, (data) => {
     const g = billTo.gstin.trim().toUpperCase()
-    if (validateGstin(g, { required: true }) !== null) return
-    setGstinFetch({ loading: true, error: null, cached: false })
-    const r = await lookupGstin(g)
-    if (!r.ok) {
-      setGstinFetch({ loading: false, error: r.error, cached: false })
-      return
-    }
-    setGstinFetch({ loading: false, error: null, cached: r.cached })
-    const d = r.data
     const next: BillTo = {
       gstin: g,
-      lglNm: d.lglNm || billTo.lglNm,
-      addr1: d.addr1 || billTo.addr1,
-      addr2: d.addr2 ?? billTo.addr2,
-      loc: d.loc || billTo.loc,
-      pin: d.pin || billTo.pin,
-      stcd: d.stcd || billTo.stcd,
-      pos: d.pos || d.stcd || billTo.pos,
+      lglNm: data.lglNm || billTo.lglNm,
+      addr1: data.addr1 || billTo.addr1,
+      addr2: data.addr2 ?? billTo.addr2,
+      loc: data.loc || billTo.loc,
+      pin: data.pin || billTo.pin,
+      stcd: data.stcd || billTo.stcd,
+      pos: data.pos || data.stcd || billTo.pos,
       ph: billTo.ph,
       em: billTo.em,
     }
     setBillTo(next)
     setBuyerId(undefined)
     if (shipSame) setShipTo(shipFromBillTo(next))
-  }
+    setBillToSnapshot({
+      lglNm: next.lglNm,
+      addr1: next.addr1,
+      addr2: next.addr2,
+      loc: next.loc,
+      pin: next.pin,
+      stcd: next.stcd,
+    })
+  })
 
   const isIntra = seller.stcd === billTo.pos
   const lines = useMemo(() => computeLines(items, isIntra), [items, isIntra])
   const forceTotal = forceTotalStr.trim() ? Number(forceTotalStr) : undefined
   const summary = useMemo(() => summarize(lines, forceTotal), [lines, forceTotal])
 
+  const prevRawTotalRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (prevRawTotalRef.current !== null && prevRawTotalRef.current !== summary.rawTotal) {
+      setForceTotalStr('')
+    }
+    prevRawTotalRef.current = summary.rawTotal
+  }, [summary.rawTotal])
+
   const handleBuyerSelected = (b: Buyer) => {
     setBuyerId(b.id)
     const bill = billFromBuyer(b)
     setBillTo(bill)
     if (shipSame) setShipTo(shipFromBillTo(bill))
+    // ── record snapshot so edits after picking trigger the dialog ──
+    setBillToSnapshot({
+      lglNm: bill.lglNm,
+      addr1: bill.addr1,
+      addr2: bill.addr2,
+      loc: bill.loc,
+      pin: bill.pin,
+      stcd: bill.stcd,
+    })
   }
 
   const updateBillTo = (patch: Partial<BillTo>) => {
-    if (patch.gstin != null && gstinFetch.error) {
-      setGstinFetch({ loading: false, error: null, cached: false })
-    }
+    if (patch.gstin != null && billToFetch.error) billToFetch.clearError()
     setBillTo((prev) => {
-      let next = { ...prev, ...patch }
-      if (patch.pin != null && patch.stcd == null) {
-        const stcd = pinToStcd(patch.pin)
-        if (stcd) next = { ...next, stcd, pos: stcd }
-      }
+      const next = { ...prev, ...patch }
       if (shipSame) setShipTo(shipFromBillTo(next))
       return next
     })
-    if (patch.pin != null && String(patch.pin).length === 6) {
-      const pin = patch.pin
-      fetchCityFromPin(pin).then((city) => {
-        if (!city) return
-        setBillTo((prev) => {
-          if (prev.pin !== pin) return prev
-          const next = { ...prev, loc: city }
-          if (shipSame) setShipTo(shipFromBillTo(next))
-          return next
-        })
-      })
-    }
   }
 
   const addItemFromProduct = (p: Product) => {
@@ -136,11 +146,49 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setItems((arr) => arr.map((it, i) => (i === idx ? { ...it, ...patch } : it)))
   const removeItem = (idx: number) => setItems((arr) => arr.filter((_, i) => i !== idx))
 
-  const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0
+  const billToValid = !!billTo.lglNm.trim() && !!billTo.gstin.trim() && !!billTo.addr1.trim() && !!billTo.loc.trim() && billTo.pin > 0 && !validateStcd(billTo.stcd)
+  // EWB is optional, but if provided, it must be valid
+  const ewbValid = !ewb || (
+    (!ewb.transId?.trim() || !!ewb.transName?.trim()) &&
+    (!ewb.transId?.trim() || ewb.transId.trim().length === 15)
+  )
+
   const canSave =
-    billToValid && items.length > 0 && !!docNo.trim() && !!docDt &&
+    billToValid && items.length > 0 && !!docNo.trim() && !!docDt && ewbValid &&
     items.every((it) => it.prdDesc.trim() && validateHsn(it.hsnCd, { required: true }) == null && it.qty > 0 && it.unitPrice > 0)
 
+  // ── detect if user edited auto-filled fields after fetch ──
+  const snapshotKeys: (keyof BillTo)[] = ['lglNm', 'addr1', 'addr2', 'loc', 'pin', 'stcd']
+  const billToChanged = billToSnapshot !== null && snapshotKeys.some(
+    (k) => String(billTo[k] ?? '') !== String(billToSnapshot[k] ?? '')
+  )
+  const shipToChanged = shipToSnapshot !== null && snapshotKeys.some(
+    (k) => String((shipTo as any)[k] ?? '') !== String((shipToSnapshot as any)[k] ?? '')
+  )
+  const hasFetchChanges = billToChanged || shipToChanged
+
+  const validationIssues: string[] = []
+  if (!docNo.trim()) validationIssues.push('Invoice #')
+  if (!billTo.lglNm.trim()) validationIssues.push('Buyer name')
+  if (!billTo.gstin.trim()) validationIssues.push('Buyer GSTIN')
+  if (!billTo.addr1.trim()) validationIssues.push('Buyer address')
+  if (!billTo.loc.trim()) validationIssues.push('Buyer location')
+  if (!(billTo.pin > 0)) validationIssues.push('Buyer PIN')
+  if (validateStcd(billTo.stcd)) validationIssues.push('Buyer state code')
+  if (items.length === 0) {
+    validationIssues.push('No items added')
+  } else {
+    items.forEach((it, i) => {
+      if (!it.prdDesc.trim()) validationIssues.push(`Item ${i + 1} · name`)
+      if (validateHsn(it.hsnCd, { required: true })) validationIssues.push(`Item ${i + 1} · HSN invalid`)
+      if (!(it.qty > 0)) validationIssues.push(`Item ${i + 1} · qty`)
+      if (!(it.unitPrice > 0)) validationIssues.push(`Item ${i + 1} · price`)
+    })
+  }
+  if (ewb) {
+    if (ewb.transId?.trim() && !ewb.transName?.trim()) validationIssues.push('E-way · transporter name')
+    if (ewb.transId?.trim() && ewb.transId.trim().length !== 15) validationIssues.push('E-way · transporter ID (15 chars)')
+  }
 
   const buildInvoice = (): Invoice => ({
     id: existing?.id ?? newId(),
@@ -155,14 +203,9 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     createdAt: existing?.createdAt ?? Date.now(),
   })
 
-  const save = () => {
-    if (!canSave) return
-    upsertInvoice(buildInvoice())
-    onDone()
-  }
-
-  const exportJson = () => {
-    if (!canSave) return
+  // ── split actual save/export logic out so dialog can call them ──
+  const doSave = () => {
+    // on save, if GSTIN doesn't match any existing buyer, create a new buyer record so it shows up in suggestions later
     const inv = buildInvoice()
     const gstinKey = normGstin(billTo.gstin)
     const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
@@ -185,7 +228,33 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     } else if (matched && !inv.buyerId) {
       inv.buyerId = matched.id
     }
+    upsertInvoice(inv)
+    onDone()
+  }
 
+  const doExport = () => {
+    const inv = buildInvoice()
+    const gstinKey = normGstin(billTo.gstin)
+    const matched = buyers.find((b) => normGstin(b.gstin) === gstinKey)
+    if (!matched && gstinKey) {
+      const newBuyer: Buyer = {
+        id: newId(),
+        gstin: billTo.gstin,
+        lglNm: billTo.lglNm,
+        addr1: billTo.addr1,
+        addr2: billTo.addr2,
+        loc: billTo.loc,
+        pin: billTo.pin,
+        pos: billTo.pos,
+        stcd: billTo.stcd,
+        ph: billTo.ph,
+        em: billTo.em,
+      }
+      upsertBuyer(newBuyer)
+      inv.buyerId = newBuyer.id
+    } else if (matched && !inv.buyerId) {
+      inv.buyerId = matched.id
+    }
     upsertInvoice(inv)
     const payload = [toNicJson(seller, inv)]
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -196,6 +265,32 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
     onDone()
+  }
+
+  // ── GSTIN status check + review gate (both save and export paths) ──
+  const triggerReview = async (action: 'save' | 'export') => {
+    if (validateGstin(billTo.gstin, { required: true }) === null) {
+      const status = await checkGstinStatus(billTo.gstin)
+      if (status !== null && status !== 'Active') {
+        setStatusWarnAction(action)
+        setStatusWarn(status)
+        return
+      }
+    }
+    setReviewAction(action)
+  }
+
+  // ── save/export gate through fetch-changes dialog → status check → review ──
+  const save = () => {
+    if (!canSave) return
+    if (hasFetchChanges) { setPendingAction('save'); return }
+    triggerReview('save')
+  }
+
+  const exportJson = async () => {
+    if (!canSave) return
+    if (hasFetchChanges) { setPendingAction('export'); return }
+    await triggerReview('export')
   }
 
   return (
@@ -232,8 +327,39 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onChange={updateBillTo}
           buyers={buyers}
           onPick={handleBuyerSelected}
-          onFetchGstin={fetchGstinDetails}
-          fetchState={gstinFetch}
+          onFetch={(data) => {
+            const g = billTo.gstin.trim().toUpperCase()
+            const next: BillTo = {
+              gstin: g,
+              lglNm: data.lglNm || billTo.lglNm,
+              addr1: data.addr1 || billTo.addr1,
+              addr2: data.addr2 ?? billTo.addr2,
+              loc: data.loc || billTo.loc,
+              pin: data.pin || billTo.pin,
+              stcd: data.stcd || billTo.stcd,
+              pos: data.pos || data.stcd || billTo.pos,
+              ph: billTo.ph,
+              em: billTo.em,
+            }
+            setBillTo(next)
+            setBuyerId(undefined)
+            if (shipSame) setShipTo(shipFromBillTo(next))
+            setBillToSnapshot({ lglNm: next.lglNm, addr1: next.addr1, addr2: next.addr2, loc: next.loc, pin: next.pin, stcd: next.stcd })
+          }}
+          onCityResolved={(pin, city) => {
+            setBillTo((prev) => {
+              if (prev.pin !== pin) return prev
+              const next = { ...prev, loc: city }
+              if (shipSame) setShipTo(shipFromBillTo(next))
+              return next
+            })
+          }}
+          onClear={() => {
+            setBillTo({ gstin: '', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, pos: '09', stcd: '09' })
+            setBuyerId(undefined)
+            setBillToSnapshot(null)
+            if (shipSame) setShipTo({ gstin: '', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+          }}
         />
 
         <ShipToSection
@@ -242,8 +368,36 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onToggleSame={(same) => {
             setShipSame(same)
             if (same) setShipTo(shipFromBillTo(billTo))
+            else setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
           }}
           onChange={setShipTo}
+          onFetchSuccess={(fetched) => setShipToSnapshot(fetched)}
+          onClear={() => {
+            setShipTo({ gstin: 'URP', lglNm: '', addr1: '', addr2: undefined, loc: '', pin: 0, stcd: '09' })
+            setShipToSnapshot(null)
+          }}
+          buyers={buyers}
+          onPick={(b) => {
+            const s: ShipAddress = {
+              gstin: b.gstin,
+              lglNm: b.lglNm,
+              addr1: b.addr1,
+              addr2: b.addr2,
+              loc: b.loc,
+              pin: b.pin,
+              stcd: b.stcd,
+            }
+            setShipTo(s)
+            // ── record snapshot so edits after picking trigger the dialog ──
+            setShipToSnapshot({
+              lglNm: b.lglNm,
+              addr1: b.addr1,
+              addr2: b.addr2,
+              loc: b.loc,
+              pin: b.pin,
+              stcd: b.stcd,
+            })
+          }}
         />
 
         <ItemsSection
@@ -273,11 +427,30 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           onChange={setEwb}
         />
 
+        {validationIssues.length === 0 ? (
+          <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-green-50 border border-green-200">
+            <span className="text-green-600 text-base leading-none">✓</span>
+            <span className="text-xs text-green-700 font-medium">Looks good — verify amounts before exporting.</span>
+          </div>
+        ) : (
+          <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200">
+            <p className="text-[11px] font-medium text-amber-700 mb-1">Fill in before saving:</p>
+            <ul className="space-y-0.5">
+              {validationIssues.map((msg) => (
+                <li key={msg} className="flex items-start gap-1.5 text-xs text-amber-800">
+                  <span className="shrink-0 text-amber-400 leading-[1.4]">·</span>
+                  <span>{msg}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="flex gap-2 pt-2">
           <button
             onClick={save}
             disabled={!canSave}
-            className="flex-1 py-3 rounded-xl bg-slate-200 text-slate-900 font-medium disabled:opacity-50 active:scale-95 transition"
+            className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium disabled:opacity-50 active:scale-95 transition"
           >
             Save draft
           </button>
@@ -290,29 +463,166 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           </button>
         </div>
       </div>
+      {/* ── confirmation dialog ── */}
+      {pendingAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-3">
+            <h2 className="text-base font-semibold text-slate-900">Details changed after fetch</h2>
+            <p className="text-sm text-slate-600">
+              Auto-filled details
+              {billToChanged && shipToChanged
+                ? ' in Bill To and Ship To'
+                : billToChanged ? ' in Bill To' : ' in Ship To'}
+              {' '}were manually edited after fetching from GSTIN. They may no longer match the registered details.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setPendingAction(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Rectify
+              </button>
+              <button
+                onClick={() => {
+                  const action = pendingAction!
+                  setPendingAction(null)
+                  triggerReview(action)
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
+              >
+                Proceed anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {statusWarn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-3">
+            <h2 className="text-base font-semibold text-slate-900">Buyer GSTIN is {statusWarn}</h2>
+            <p className="text-sm text-slate-600">
+              {billTo.gstin} is currently <span className="font-medium text-red-600">{statusWarn}</span> on the GST portal.
+              Issuing an invoice against a {statusWarn.toLowerCase()} GSTIN may be non-compliant and the buyer's ITC claim could be denied.
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setStatusWarn(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Go back
+              </button>
+              <button
+                onClick={() => { setStatusWarn(null); setReviewAction(statusWarnAction) }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-medium active:scale-95 transition"
+              >
+                {statusWarnAction === 'save' ? 'Save anyway' : 'Export anyway'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── pre-save/export review overlay ── */}
+      {reviewAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-sm space-y-4">
+            <h2 className="text-base font-semibold text-slate-900">Review before {reviewAction === 'save' ? 'saving' : 'exporting'}</h2>
+
+            <div className="space-y-0.5">
+              <div className="text-sm font-medium text-slate-900">#{docNo} · {docDt}</div>
+              <div className="text-sm text-slate-500 truncate">{billTo.lglNm || '—'}</div>
+              <div className="text-xs text-slate-400">{items.length} item{items.length !== 1 ? 's' : ''}</div>
+            </div>
+
+            <dl className="text-sm border-t border-slate-100 pt-3 space-y-1.5">
+              <div className="flex justify-between text-slate-600">
+                <dt>Taxable value</dt>
+                <dd>₹{summary.assVal.toFixed(2)}</dd>
+              </div>
+              {isIntra ? (
+                <>
+                  <div className="flex justify-between text-slate-600">
+                    <dt>CGST</dt>
+                    <dd>₹{summary.cgstVal.toFixed(2)}</dd>
+                  </div>
+                  <div className="flex justify-between text-slate-600">
+                    <dt>SGST</dt>
+                    <dd>₹{summary.sgstVal.toFixed(2)}</dd>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-slate-600">
+                  <dt>IGST</dt>
+                  <dd>₹{summary.igstVal.toFixed(2)}</dd>
+                </div>
+              )}
+              {summary.rndOffAmt !== 0 && (
+                <div className="flex justify-between font-medium text-amber-600">
+                  <dt>Round-off</dt>
+                  <dd>{summary.rndOffAmt > 0 ? '+' : ''}₹{summary.rndOffAmt.toFixed(2)}</dd>
+                </div>
+              )}
+              <div className="flex justify-between text-slate-900 font-semibold text-base border-t border-slate-200 pt-2 mt-1">
+                <dt>Total</dt>
+                <dd>₹{summary.totInvVal.toFixed(2)}</dd>
+              </div>
+            </dl>
+
+            <p className="text-[11px] text-slate-500 italic leading-snug">
+              {amountInWords(summary.totInvVal)}
+            </p>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setReviewAction(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium active:scale-95 transition"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => { const a = reviewAction; setReviewAction(null); if (a === 'save') {doSave();} else { doExport(); } }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-medium active:scale-95 transition"
+              >
+                {reviewAction === 'save' ? 'Save' : 'Export'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 function BillToSection({
-  billTo, onChange, buyers, onPick, onFetchGstin, fetchState,
+  billTo, onChange, buyers, onPick, onFetch, onCityResolved, onClear,
 }: {
   billTo: BillTo
   onChange: (patch: Partial<BillTo>) => void
   buyers: Buyer[]
   onPick: (b: Buyer) => void
-  onFetchGstin: () => void
-  fetchState: { loading: boolean; error: string | null; cached: boolean }
+  onFetch: (data: Partial<BillTo> & { tradeNam?: string | null; status?: string | null }) => void
+  onCityResolved: (pin: number, city: string) => void
+  onClear: () => void
 }) {
-  const gstinFormatOk = validateGstin(billTo.gstin, { required: true }) === null
-  const fetchHint = fetchState.loading
-    ? 'Looking up…'
-    : fetchState.cached
-      ? 'Auto-filled (cached)'
-      : null
+  const fetch = useGstinFetch(billTo.gstin, onFetch)
+  const [armed, setArmed] = useState(false)
+  const hasContent = !!(billTo.gstin || billTo.lglNm || billTo.addr1 || billTo.loc || billTo.pin)
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
-      <label className="text-xs font-medium text-slate-500 block mb-2">Bill to</label>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-medium text-slate-500">Bill to</label>
+        {hasContent && (
+          armed ? (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setArmed(false)} className="text-[11px] text-slate-500 px-2 py-1">Cancel</button>
+              <button type="button" onClick={() => { onClear(); setArmed(false) }} className="text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1">Confirm clear</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setArmed(true)} className="text-[11px] text-slate-500 underline">Clear</button>
+          )
+        )}
+      </div>
 
       <div className="space-y-2">
         <Field label="Legal name" error={requireText(billTo.lglNm)}>
@@ -324,7 +634,7 @@ function BillToSection({
             onPick={onPick}
           />
         </Field>
-        <Field label="GSTIN" error={fetchState.error ?? validateGstin(billTo.gstin, { required: true })} hint={fetchHint}>
+        <Field label="GSTIN" error={fetch.error ?? validateGstin(billTo.gstin, { required: true })} hint={fetch.hint}>
           <div className="flex gap-2">
             <div className="flex-1 min-w-0">
               <ClientSuggest
@@ -337,14 +647,7 @@ function BillToSection({
                 transform={(v) => v.toUpperCase()}
               />
             </div>
-            <button
-              type="button"
-              onClick={onFetchGstin}
-              disabled={!gstinFormatOk || fetchState.loading}
-              className="shrink-0 px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-40 active:scale-95 transition"
-            >
-              {fetchState.loading ? '…' : 'Fetch'}
-            </button>
+            <FetchButton onClick={fetch.fetch} loading={fetch.loading} disabled={fetch.fetchDisabled} />
           </div>
         </Field>
         <Field label="Address" error={requireText(billTo.addr1)}>
@@ -356,15 +659,10 @@ function BillToSection({
             <input className={inp} value={billTo.loc} onChange={(e) => onChange({ loc: e.target.value })} />
           </Field>
           <Field label="PIN" error={validatePin(billTo.pin, { required: true })}>
-            <input
-              className={inp}
-              inputMode="numeric"
-              maxLength={6}
-              value={billTo.pin ? String(billTo.pin) : ''}
-              onChange={(e) => {
-                const d = onlyDigits(e.target.value, 6)
-                onChange({ pin: d ? Number(d) : 0 })
-              }}
+            <PinInput
+              value={billTo.pin}
+              onPinChange={(pin, stcd) => onChange({ pin, ...(stcd ? { stcd, pos: stcd } : {}) })}
+              onCityResolved={onCityResolved}
             />
           </Field>
           <Field label="State (Stcd)" error={validateStcd(billTo.stcd)} hint={stcdName(billTo.stcd)}>
@@ -448,29 +746,57 @@ function ClientSuggest({
 }
 
 function ShipToSection({
-  shipSame, shipTo, onToggleSame, onChange,
+  shipSame, shipTo, onToggleSame, onChange, onFetchSuccess, onClear, buyers, onPick,
 }: {
   shipSame: boolean
   shipTo: ShipAddress
   onToggleSame: (same: boolean) => void
   onChange: (s: ShipAddress) => void
+  onFetchSuccess: (fetched: Partial<ShipAddress>) => void
+  onClear: () => void
+  buyers: Buyer[]
+  onPick: (b: Buyer) => void
 }) {
+  const [armed, setArmed] = useState(false)
+  const shipToRef = useRef(shipTo)
+  useEffect(() => { shipToRef.current = shipTo }, [shipTo])
+  const hasContent = !shipSame && !!(
+    (shipTo.gstin && shipTo.gstin !== 'URP') || shipTo.lglNm || shipTo.addr1 || shipTo.loc || shipTo.pin
+  )
   const set = <K extends keyof ShipAddress>(k: K, v: ShipAddress[K]) => onChange({ ...shipTo, [k]: v })
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (city) onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}), loc: city })
-      })
-    }
-  }
+
+  const shipFetch = useGstinFetch(
+    shipTo.gstin === 'URP' ? '' : shipTo.gstin,
+    (data) => {
+      const g = shipTo.gstin.trim().toUpperCase()
+      const merged = {
+        lglNm: data.lglNm || shipTo.lglNm,
+        addr1: [data.addr1, data.addr2].filter(Boolean).join(' '),
+        addr2: undefined as undefined,
+        loc: data.loc || shipTo.loc,
+        pin: data.pin || shipTo.pin,
+        stcd: data.stcd || shipTo.stcd,
+      }
+      onChange({ ...shipTo, gstin: g, ...merged })
+      onFetchSuccess(merged)
+    },
+  )
 
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
-      <label className="text-xs font-medium text-slate-500 block mb-2">Ship to</label>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-medium text-slate-500">Ship to</label>
+        {hasContent && (
+          armed ? (
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setArmed(false)} className="text-[11px] text-slate-500 px-2 py-1">Cancel</button>
+              <button type="button" onClick={() => { onClear(); setArmed(false) }} className="text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-1">Confirm clear</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setArmed(true)} className="text-[11px] text-slate-500 underline">Clear</button>
+          )
+        )}
+      </div>
       <label className="flex items-center gap-2 py-2">
         <input
           type="checkbox"
@@ -482,28 +808,64 @@ function ShipToSection({
       </label>
       {!shipSame && (
         <div className="space-y-2 mt-2">
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="GSTIN (or URP)" error={validateGstin(shipTo.gstin, { required: true, allowURP: true })}>
-              <input className={inp} value={shipTo.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
-            </Field>
-            <Field label="Name / contact" error={requireText(shipTo.lglNm)}>
-              <input className={inp} value={shipTo.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
-            </Field>
-          </div>
+          {/* GSTIN full-width with Fetch button */}
+          <Field
+            label="GSTIN"
+            error={shipFetch.error ?? validateGstin(shipTo.gstin, { required: true, allowURP: true })}
+            hint={shipFetch.hint ?? (shipTo.gstin === 'URP' ? 'Leave blank if buyer has no GSTIN' : null)}
+          >
+            <div className="flex gap-2">
+              <div className="flex-1 min-w-0">
+                <ClientSuggest
+                  value={shipTo.gstin === 'URP' ? '' : shipTo.gstin}
+                  onChange={(v) => {
+                    if (shipFetch.error) shipFetch.clearError()
+                    set('gstin', v.toUpperCase() || 'URP')
+                  }}
+                  buyers={buyers}
+                  matchOn="gstin"
+                  onPick={onPick}
+                  maxLength={15}
+                  transform={(v) => v.toUpperCase()}
+                />
+              </div>
+              <FetchButton onClick={shipFetch.fetch} loading={shipFetch.loading} disabled={shipFetch.fetchDisabled} />
+            </div>
+          </Field>
+          <Field label="Legal Name" error={requireText(shipTo.lglNm)}>
+            <ClientSuggest
+              value={shipTo.lglNm}
+              onChange={(v) => set('lglNm', v)}
+              buyers={buyers}
+              matchOn="lglNm"
+              onPick={onPick}
+            />
+          </Field>
+
+          {/* Merged address: addr1 + addr2 concatenated, single input */}
           <Field label="Address" error={requireText(shipTo.addr1)}>
-            <input className={inp} value={shipTo.addr1} onChange={(e) => set('addr1', e.target.value)} />
+            <input
+              className={inp}
+              value={[shipTo.addr1, shipTo.addr2].filter(Boolean).join(' ')}
+              onChange={(e) => {
+                // Split at first comma or just put everything in addr1
+                const val = e.target.value
+                set('addr1', val)
+                // clear addr2 since we're merging into one field
+                onChange({ ...shipTo, addr1: val, addr2: undefined })
+              }}
+              placeholder="Address line 1 and 2"
+            />
           </Field>
           <div className="grid grid-cols-3 gap-2">
             <Field label="Location" error={requireText(shipTo.loc)}>
               <input className={inp} value={shipTo.loc} onChange={(e) => set('loc', e.target.value)} />
             </Field>
             <Field label="PIN" error={validatePin(shipTo.pin, { required: true })}>
-              <input
-                className={inp}
-                inputMode="numeric"
-                maxLength={6}
-                value={shipTo.pin ? String(shipTo.pin) : ''}
-                onChange={(e) => setPin(e.target.value)}
+              <PinInput
+                value={shipTo.pin}
+                onPinChange={(pin, stcd) => onChange({ ...shipTo, pin, ...(stcd ? { stcd } : {}) })}
+                onCityResolved={(_pin, city) => onChange({ ...shipToRef.current, loc: city })}
               />
             </Field>
             <Field label="Stcd" error={validateStcd(shipTo.stcd)} hint={stcdName(shipTo.stcd)}>
@@ -536,31 +898,7 @@ function ItemsSection({
         <label className="text-xs font-medium text-slate-500">Items {items.length > 0 && `(${items.length})`}</label>
       </div>
 
-      {pickerOpen ? (
-        <ProductPicker
-          products={products}
-          onPick={(p) => { onAddProduct(p); setPickerOpen(false) }}
-          onCreate={(p) => { onCreateProduct(p); setPickerOpen(false) }}
-          onCancel={() => setPickerOpen(false)}
-        />
-      ) : (
-        <div className="flex gap-2">
-          <button
-            onClick={() => setPickerOpen(true)}
-            className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
-          >
-            + Add from products
-          </button>
-          <button
-            onClick={() => onAddBlank()}
-            className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
-          >
-            + Blank
-          </button>
-        </div>
-      )}
-
-      <div className="mt-3 space-y-2">
+      <div className="space-y-2">
         {items.map((it, idx) => (
           <ItemRow
             key={idx}
@@ -571,6 +909,32 @@ function ItemsSection({
             onRemove={() => onRemove(idx)}
           />
         ))}
+      </div>
+
+      <div className="mt-3">
+        {pickerOpen ? (
+          <ProductPicker
+            products={products}
+            onPick={(p) => { onAddProduct(p); setPickerOpen(false) }}
+            onCreate={(p) => { onCreateProduct(p); setPickerOpen(false) }}
+            onCancel={() => setPickerOpen(false)}
+          />
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPickerOpen(true)}
+              className="flex-1 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-medium"
+            >
+              + Add from products
+            </button>
+            <button
+              onClick={() => onAddBlank()}
+              className="px-3 py-2.5 rounded-lg border border-slate-300 text-slate-700 text-sm"
+            >
+              + Blank
+            </button>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -586,6 +950,8 @@ function ItemRow({
   onRemove: () => void
 }) {
   const hsnError = validateHsn(item.hsnCd, { required: true })
+  const [totalEdit, setTotalEdit] = useState('')
+  const [editingTotal, setEditingTotal] = useState(false)
   return (
     <div className="border border-slate-200 rounded-lg p-2">
       <div className="flex items-center gap-2">
@@ -611,7 +977,8 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.qty || ''}
-            onChange={(e) => onUpdate({ qty: Number(e.target.value) })}
+            max={MAX_QTY}
+            onChange={(e) => onUpdate({ qty: Math.min(Number(e.target.value), MAX_QTY), discount: 0 })}
             className={`${miniInp} ${item.qty > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -621,7 +988,8 @@ function ItemRow({
             inputMode="decimal"
             step="any"
             value={item.unitPrice || ''}
-            onChange={(e) => onUpdate({ unitPrice: Number(e.target.value) })}
+            max={MAX_PRICE}
+            onChange={(e) => onUpdate({ unitPrice: Math.min(Number(e.target.value), MAX_PRICE), discount: 0 })}
             className={`${miniInp} ${item.unitPrice > 0 ? '' : 'border-red-400'}`}
           />
         </Mini>
@@ -646,11 +1014,7 @@ function ItemRow({
           />
         </Mini>
         <Mini label="Unit">
-          <select value={item.unit} onChange={(e) => onUpdate({ unit: e.target.value })} className={miniInp}>
-            {UQC_CODES.map((u) => (
-              <option key={u.code} value={u.code}>{u.code}</option>
-            ))}
-          </select>
+          <UnitSelect value={item.unit} onChange={(v) => onUpdate({ unit: v })} className={miniInp} />
         </Mini>
       </div>
       {hsnError && (
@@ -669,9 +1033,9 @@ function ItemRow({
             type="number"
             inputMode="decimal"
             step="any"
-            value={Number.isFinite(taxable) ? taxable : 0}
+            value={taxable || ''}
             onChange={(e) => {
-              const newTaxable = Number(e.target.value)
+              const newTaxable = Math.min(Number(e.target.value), MAX_TAXABLE)
               if (!(item.qty > 0)) return
               const gross = item.qty * item.unitPrice
               onUpdate({ discount: Math.round((gross - newTaxable) * 100) / 100 })
@@ -679,7 +1043,25 @@ function ItemRow({
             className="w-24 border border-slate-200 rounded px-2 py-0.5 text-right"
           />
         </label>
-        <span className="text-slate-900 font-medium">Total ₹{total.toFixed(2)}</span>
+        <label className="flex items-center gap-1 text-slate-900 font-medium">
+          <span>Total ₹</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="any"
+            value={editingTotal ? totalEdit : (total || '')}
+            onFocus={() => { setEditingTotal(true); setTotalEdit(total > 0 ? String(total) : '') }}
+            onBlur={() => setEditingTotal(false)}
+            onChange={(e) => {
+              setTotalEdit(e.target.value)
+              const newTotal = Math.min(Number(e.target.value), MAX_TOTAL)
+              if (!(item.qty > 0) || !(newTotal > 0)) return
+              const newTaxable = Math.round(newTotal / (1 + item.gstRt / 100) * 100) / 100
+              onUpdate({ unitPrice: Math.round(newTaxable / item.qty * 100) / 100, discount: 0 })
+            }}
+            className="w-24 border border-slate-200 rounded px-2 py-0.5 text-right"
+          />
+        </label>
       </div>
     </div>
   )
@@ -774,20 +1156,15 @@ function QuickProductForm({
       </div>
       <div className="grid grid-cols-2 gap-2">
         <Field label="Unit (UQC)">
-          <select className={inp} value={p.unit} onChange={(e) => set('unit', e.target.value)}>
-            {UQC_CODES.map((u) => (
-              <option key={u.code} value={u.code}>{u.code} — {u.label}</option>
-            ))}
-          </select>
+          <UnitSelect value={p.unit} onChange={(v) => set('unit', v)} />
         </Field>
         <Field label="GST %"><input className={inp} type="number" inputMode="decimal" value={p.gstRt || ''} onChange={(e) => set('gstRt', Number(e.target.value))} /></Field>
       </div>
       <div className="flex flex-wrap gap-1.5">
         {[0, 5, 12, 18, 28].map((slab) => (
           <button key={slab} type="button" onClick={() => set('gstRt', slab)}
-            className={`px-2.5 py-1 rounded-full text-xs border ${
-              p.gstRt === slab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300'
-            }`}>{slab}%</button>
+            className={`px-2.5 py-1 rounded-full text-xs border ${p.gstRt === slab ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300'
+              }`}>{slab}%</button>
         ))}
       </div>
       <div className="flex gap-2 pt-1">
@@ -831,7 +1208,7 @@ function SummarySection({
         <dd className="text-right">₹{summary.rawTotal.toFixed(2)}</dd>
       </dl>
 
-      <label className="block text-xs font-medium text-slate-500 mt-4 mb-1">Final total (editable)</label>
+      <label className="block text-xs font-medium text-slate-500 mt-4 mb-1">Override total (optional)</label>
       <div className="flex gap-2">
         <input
           type="number"
@@ -844,17 +1221,17 @@ function SummarySection({
         />
         <button
           onClick={() => setForceTotalStr(String(Math.floor(summary.rawTotal)))}
-          className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg active:bg-slate-200"
-          title="Round down"
+          className="flex flex-col items-center px-2.5 py-1.5 text-slate-700 bg-slate-100 rounded-lg active:bg-slate-200 leading-tight"
         >
-          ↓
+          <span className="text-[10px]">↓</span>
+          <span className="text-[11px] font-medium">₹{Math.floor(summary.rawTotal)}</span>
         </button>
         <button
           onClick={() => setForceTotalStr(String(Math.ceil(summary.rawTotal)))}
-          className="px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg active:bg-slate-200"
-          title="Round up"
+          className="flex flex-col items-center px-2.5 py-1.5 text-slate-700 bg-slate-100 rounded-lg active:bg-slate-200 leading-tight"
         >
-          ↑
+          <span className="text-[10px]">↑</span>
+          <span className="text-[11px] font-medium">₹{Math.ceil(summary.rawTotal)}</span>
         </button>
       </div>
       <div className="mt-2 text-xs text-slate-500 flex justify-between">
@@ -862,7 +1239,7 @@ function SummarySection({
         <span>Final: <strong className="text-slate-900">₹{summary.totInvVal.toFixed(2)}</strong></span>
       </div>
       <p className="text-[11px] text-slate-400 mt-1">
-        Blank = raw ₹{summary.rawTotal.toFixed(2)}. Type any amount to force round-off (e.g. 2000.62 → 2000).
+        Leave empty to use the calculated total ₹{summary.rawTotal.toFixed(2)}, or tap a button to round.
       </p>
     </section>
   )
@@ -890,6 +1267,13 @@ function EwbSection({
   const set = <K extends keyof EwbDtls>(k: K, v: EwbDtls[K]) =>
     onChange({ ...(ewb ?? defaultEwb(invoiceDate)), [k]: v })
 
+  const [distanceStr, setDistanceStr] = useState<string>(String(ewb?.distance ?? 0))
+
+  // Validation logic
+  const transNameMissing = ewb ? (!!ewb.transId?.trim() && !ewb.transName?.trim()) : false
+  const transIdError = ewb?.transId?.trim()
+    ? (ewb.transId.trim().length !== 15 ? 'Transporter ID must be exactly 15 characters' : null)
+    : null
   return (
     <section className="bg-white rounded-xl p-4 shadow-sm">
       <label className="flex items-center gap-2 py-1 cursor-pointer">
@@ -905,13 +1289,18 @@ function EwbSection({
       {enabled && ewb && (
         <div className="mt-3 space-y-2">
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Distance (km) *">
+            {/* Distance can be auto-calculated by the system based on the 'From' and 'To' pincodes, but allowing manual override if needed (e.g. for multi-modal transport or specific routes). */}
+            <Field label="Distance (km)" hint={ewb.distance === 0 ? 'Distance will be auto-calculated' : null}>
               <input
                 className={inp}
-                type="number"
                 inputMode="numeric"
-                value={ewb.distance || ''}
-                onChange={(e) => set('distance', Number(e.target.value))}
+                pattern="[0-9]*"
+                value={distanceStr}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
+                  setDistanceStr(raw)
+                  set('distance', raw === '' ? 0 : Math.max(0, Math.floor(Number(raw))))
+                }}
               />
             </Field>
             <Field label="Vehicle number (optional)">
@@ -955,32 +1344,32 @@ function EwbSection({
           </Field>
 
           <div className="grid grid-cols-2 gap-2">
-            <Field label="Transporter ID (optional)">
-              <input className={inp} value={ewb.transId ?? ''} onChange={(e) => set('transId', e.target.value || undefined)} />
+            {/* Either transporter ID or vehicle number is required to generate the E-way bill, but not necessarily both. This allows flexibility for cases where the transporter may not have a registered ID or when the vehicle details are not available at the time of invoice creation. */}
+            <Field label="Transporter ID (optional)" error={transIdError}>
+              <input
+                className={inp}
+                value={ewb.transId ?? ''}
+                onChange={(e) => set('transId', e.target.value.toUpperCase() || undefined)}
+                maxLength={15}
+              />
             </Field>
-            <Field label="Transporter name (optional)">
-              <input className={inp} value={ewb.transName ?? ''} onChange={(e) => set('transName', e.target.value || undefined)} />
+            {/* Transporter name is only required if transporter ID is provided, as the EWB system uses the transporter ID to fetch the name. If no transporter ID is given, the transporter name can be left blank without affecting EWB generation. */}
+            <Field label="Transporter name (optional)" error={transNameMissing ? 'Required' : null}>
+              <input
+                className={inp}
+                value={ewb.transName ?? ''}
+                onChange={(e) => set('transName', e.target.value || undefined)}
+              />
             </Field>
           </div>
+
         </div>
       )}
     </section>
   )
 }
 
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
 const miniInp = 'w-full border border-slate-200 rounded px-2 py-1 text-sm'
-
-function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-[11px] font-medium text-slate-500 mb-0.5">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  )
-}
 
 function Mini({ label, children }: { label: string; children: React.ReactNode }) {
   return (

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useStore, type Member } from '../store'
 import { supabase } from '../supabase'
 import type { Seller } from '../types'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
-import { fetchCityFromPin } from '../pincode'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, stcdName } from '../validators'
+import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
 
 export function Account() {
   const { userEmail, company, seller, setSeller, listMembers, removeMember } = useStore()
@@ -14,18 +14,20 @@ export function Account() {
   const [savingMsg, setSavingMsg] = useState('')
 
   const set = <K extends keyof Seller>(k: K, v: Seller[K]) => setS((x) => ({ ...x, [k]: v }))
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    setS((x) => ({ ...x, pin, ...(stcd ? { stcd } : {}) }))
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (!city) return
-        setS((x) => (x.pin === pin ? { ...x, loc: city } : x))
-      })
-    }
-  }
+
+  const sellerFetch = useGstinFetch(s.gstin, (data) => {
+    setS((prev) => ({
+      ...prev,
+      gstin: s.gstin.trim().toUpperCase(),
+      lglNm: data.lglNm || prev.lglNm,
+      addr1: data.addr1 || prev.addr1,
+      addr2: data.addr2 ?? prev.addr2,
+      loc: data.loc || prev.loc,
+      pin: data.pin || prev.pin,
+      stcd: data.stcd || prev.stcd,
+    }))
+  })
+
   const myRole = members.find((m) => m.email === userEmail)?.role
   const isOwner = myRole === 'owner'
 
@@ -119,8 +121,16 @@ export function Account() {
             <Field label="Legal name" error={requireText(s.lglNm)}>
               <input className={inp} value={s.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
             </Field>
-            <Field label="GSTIN" error={validateGstin(s.gstin, { required: true })}>
-              <input className={inp} value={s.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
+            <Field label="GSTIN" error={sellerFetch.error ?? validateGstin(s.gstin, { required: true })} hint={sellerFetch.hint}>
+              <div className="flex gap-2">
+                <input
+                  className={`${inp} flex-1`}
+                  value={s.gstin}
+                  onChange={(e) => { set('gstin', e.target.value.toUpperCase()); if (sellerFetch.error) sellerFetch.clearError() }}
+                  maxLength={15}
+                />
+                <FetchButton onClick={sellerFetch.fetch} loading={sellerFetch.loading} disabled={sellerFetch.fetchDisabled} />
+              </div>
             </Field>
             <Field label="Address line 1" error={requireText(s.addr1)}>
               <input className={inp} value={s.addr1} onChange={(e) => set('addr1', e.target.value)} />
@@ -131,12 +141,10 @@ export function Account() {
             </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="PIN" error={validatePin(s.pin, { required: true })}>
-                <input
-                  className={inp}
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={s.pin ? String(s.pin) : ''}
-                  onChange={(e) => setPin(e.target.value)}
+                <PinInput
+                  value={s.pin}
+                  onPinChange={(pin, stcd) => setS((x) => ({ ...x, pin, ...(stcd ? { stcd } : {}) }))}
+                  onCityResolved={(pin, city) => setS((prev) => prev.pin === pin ? { ...prev, loc: city } : prev)}
                 />
               </Field>
               <Field label="State code" error={validateStcd(s.stcd)} hint={stcdName(s.stcd)}>
@@ -180,15 +188,3 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   )
 }
 
-function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-[11px] font-medium text-slate-500 mb-0.5">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  )
-}
-
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'

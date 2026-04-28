@@ -18,7 +18,11 @@ export function Login() {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
       if (error) setErr(error.message)
     } else {
-      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password })
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { emailRedirectTo: window.location.origin },
+      })
       if (error) setErr(error.message)
       else if (data.session) setInfo('') // auto-signed-in
       else setInfo('Check your email to confirm, then sign in.')

@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useStore, newId } from '../store'
 import type { Buyer } from '../types'
-import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, pinToStcd, stcdName, onlyDigits } from '../validators'
-import { fetchCityFromPin } from '../pincode'
+import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, stcdName } from '../validators'
+import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
 
 export function ClientList() {
   const { buyers, upsertBuyer, deleteBuyer } = useStore()
@@ -141,18 +141,20 @@ export function ClientList() {
 function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buyer) => void; onCancel: () => void }) {
   const [b, setB] = useState<Buyer>(buyer)
   const set = <K extends keyof Buyer>(k: K, v: Buyer[K]) => setB((x) => ({ ...x, [k]: v }))
-  const setPin = (raw: string) => {
-    const d = onlyDigits(raw, 6)
-    const pin = d ? Number(d) : 0
-    const stcd = pinToStcd(d)
-    setB((x) => ({ ...x, pin, ...(stcd ? { stcd, pos: stcd } : {}) }))
-    if (d.length === 6) {
-      fetchCityFromPin(d).then((city) => {
-        if (!city) return
-        setB((x) => (x.pin === pin ? { ...x, loc: city } : x))
-      })
-    }
-  }
+
+  const buyerFetch = useGstinFetch(b.gstin, (data) => {
+    setB((x) => ({
+      ...x,
+      gstin: b.gstin.trim().toUpperCase(),
+      lglNm: data.lglNm || x.lglNm,
+      addr1: data.addr1 || x.addr1,
+      addr2: data.addr2 ?? x.addr2,
+      loc: data.loc || x.loc,
+      pin: data.pin || x.pin,
+      stcd: data.stcd || x.stcd,
+      pos: data.stcd || x.pos,
+    }))
+  })
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -161,11 +163,26 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
         <h1 className="text-lg font-semibold">{buyer.lglNm ? 'Edit client' : 'New client'}</h1>
       </header>
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
+        <Field
+          label="GSTIN"
+          error={buyerFetch.error ?? validateGstin(b.gstin, { required: true })}
+          hint={buyerFetch.hint}
+        >
+          <div className="flex gap-2">
+            <input
+              className={`${inp} flex-1 min-w-0`}
+              value={b.gstin}
+              onChange={(e) => {
+                if (buyerFetch.error) buyerFetch.clearError()
+                set('gstin', e.target.value.toUpperCase())
+              }}
+              maxLength={15}
+            />
+            <FetchButton onClick={buyerFetch.fetch} loading={buyerFetch.loading} disabled={buyerFetch.fetchDisabled} />
+          </div>
+        </Field>
         <Field label="Legal name" error={requireText(b.lglNm)}>
           <input className={inp} value={b.lglNm} onChange={(e) => set('lglNm', e.target.value)} />
-        </Field>
-        <Field label="GSTIN" error={validateGstin(b.gstin, { required: true })}>
-          <input className={inp} value={b.gstin} onChange={(e) => set('gstin', e.target.value.toUpperCase())} maxLength={15} />
         </Field>
         <Field label="Address line 1" error={requireText(b.addr1)}>
           <input className={inp} value={b.addr1} onChange={(e) => set('addr1', e.target.value)} />
@@ -175,12 +192,10 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
           <input className={inp} value={b.loc} onChange={(e) => set('loc', e.target.value)} />
         </Field>
         <Field label="PIN" error={validatePin(b.pin, { required: true })}>
-          <input
-            className={inp}
-            inputMode="numeric"
-            maxLength={6}
-            value={b.pin ? String(b.pin) : ''}
-            onChange={(e) => setPin(e.target.value)}
+          <PinInput
+            value={b.pin}
+            onPinChange={(pin, stcd) => setB((x) => ({ ...x, pin, ...(stcd ? { stcd, pos: stcd } : {}) }))}
+            onCityResolved={(pin, city) => setB((prev) => prev.pin === pin ? { ...prev, loc: city } : prev)}
           />
         </Field>
         <div className="grid grid-cols-2 gap-3">
@@ -206,15 +221,3 @@ function BuyerForm({ buyer, onSave, onCancel }: { buyer: Buyer; onSave: (b: Buye
   )
 }
 
-const inp = 'w-full border border-slate-300 rounded-lg px-3 py-2 text-base'
-
-function Field({ label, error, hint, children }: { label: string; error?: string | null; hint?: string | null; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
-      {children}
-      {error && <span className="block text-[11px] text-red-600 mt-0.5">{error}</span>}
-      {!error && hint && <span className="block text-[11px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  )
-}

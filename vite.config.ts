@@ -207,10 +207,11 @@ function devGstinLookup(env: Record<string, string>): PluginOption {
         try { body = await readJson(req) } catch { return sendJson(res, 400, { ok: false, error: 'Bad JSON' }) }
         const gstin = String(body.gstin ?? '').toUpperCase().trim()
         if (!GSTIN_RE.test(gstin)) return sendJson(res, 400, { ok: false, error: 'Invalid GSTIN format' })
+        const maxAgeMs = typeof body.max_age_ms === 'number' ? body.max_age_ms : CACHE_TTL_MS
 
         const hit = memCache.get(gstin)
-        if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
-          return sendJson(res, 200, { ok: true, cached: true, data: hit.data })
+        if (hit && Date.now() - hit.at < maxAgeMs) {
+          return sendJson(res, 200, { ok: true, cached: true, fetched_at: new Date(hit.at).toISOString(), data: hit.data })
         }
 
         const picked = pickProvider()
@@ -219,8 +220,9 @@ function devGstinLookup(env: Record<string, string>): PluginOption {
         try {
           const r = await picked.provider.fetch(gstin)
           if (!r.ok) return sendJson(res, 502, { ok: false, error: r.error })
-          memCache.set(gstin, { data: r.data, at: Date.now() })
-          sendJson(res, 200, { ok: true, cached: false, data: r.data })
+          const at = Date.now()
+          memCache.set(gstin, { data: r.data, at })
+          sendJson(res, 200, { ok: true, cached: false, fetched_at: new Date(at).toISOString(), data: r.data })
         } catch (e: any) {
           sendJson(res, 502, { ok: false, error: e?.message ?? String(e) })
         }

@@ -9,6 +9,24 @@ export type Member = {
   createdAt: string
 }
 
+export type HsnPack = {
+  id: string
+  slug: string
+  name: string
+  description: string | null
+  vertical: string | null
+  itemCount: number
+}
+
+export type HsnPackItem = {
+  id: string
+  hsnCd: string
+  name: string
+  unit: string
+  defaultPrice: number
+  gstRt: number
+}
+
 type State = {
   userId: string | null
   userEmail: string | null
@@ -25,10 +43,13 @@ type State = {
   setUserEmail: (email: string | null) => void
   bootstrap: (userId: string) => Promise<void>
   loadCompanyData: (companyId: string) => Promise<void>
-  createCompany: (name: string) => Promise<{ ok: boolean; error?: string }>
-  joinCompany: (code: string) => Promise<{ ok: boolean; error?: string }>
+  createCompany: (name: string) => Promise<{ ok: boolean; error?: string; companyId?: string }>
+  joinCompany: (code: string) => Promise<{ ok: boolean; error?: string; companyId?: string }>
   listMembers: () => Promise<Member[]>
   removeMember: (userId: string) => Promise<{ ok: boolean; error?: string }>
+  listHsnPacks: () => Promise<HsnPack[]>
+  listHsnPackItems: (packId: string) => Promise<HsnPackItem[]>
+  importHsnPack: (packId: string) => Promise<{ ok: boolean; count?: number; error?: string }>
   clear: () => void
 
   setSeller: (s: Seller) => Promise<void>
@@ -41,6 +62,16 @@ type State = {
 }
 
 const emptySeller: Seller = { gstin: '', lglNm: '', addr1: '', loc: '', pin: 0, stcd: '09' }
+
+const LAST_COMPANY_KEY = 'einvoice:lastCompanyId'
+
+const readLastCompanyId = (): string | null => {
+  try { return localStorage.getItem(LAST_COMPANY_KEY) } catch { return null }
+}
+
+const writeLastCompanyId = (id: string) => {
+  try { localStorage.setItem(LAST_COMPANY_KEY, id) } catch { /* ignore */ }
+}
 
 export const useStore = create<State>()((set, get) => ({
   userId: null,
@@ -84,12 +115,14 @@ export const useStore = create<State>()((set, get) => ({
       return
     }
 
-    const first = companies[0]
-    await get().loadCompanyData(first.id)
+    const lastId = readLastCompanyId()
+    const target = companies.find((c) => c.id === lastId) ?? companies[0]
+    await get().loadCompanyData(target.id)
   },
 
   loadCompanyData: async (companyId) => {
     set({ loading: true, companyId })
+    writeLastCompanyId(companyId)
 
     const co = get().companies.find((c) => c.id === companyId) ?? null
 
@@ -128,8 +161,9 @@ export const useStore = create<State>()((set, get) => ({
     }
     const userId = get().userId
     if (!userId || !data) return { ok: false, error: 'Missing user or company' }
+    writeLastCompanyId(data)
     await get().bootstrap(userId)
-    return { ok: true }
+    return { ok: true, companyId: data }
   },
 
   joinCompany: async (code) => {
@@ -140,8 +174,9 @@ export const useStore = create<State>()((set, get) => ({
     }
     const userId = get().userId
     if (!userId || !data) return { ok: false, error: 'Missing user or company' }
+    writeLastCompanyId(data)
     await get().bootstrap(userId)
-    return { ok: true }
+    return { ok: true, companyId: data }
   },
 
   listMembers: async () => {
@@ -162,19 +197,64 @@ export const useStore = create<State>()((set, get) => ({
     return { ok: true }
   },
 
-  clear: () => set({
-    userId: null,
-    userEmail: null,
-    companyId: null,
-    company: null,
-    companies: [],
-    ready: false,
-    loading: false,
-    seller: emptySeller,
-    buyers: [],
-    products: [],
-    invoices: [],
-  }),
+  listHsnPacks: async () => {
+    const { data, error } = await supabase
+      .from('hsn_packs')
+      .select('id, slug, name, description, vertical, hsn_pack_items(count)')
+      .order('name')
+    if (error) { console.error('[hsn_packs list]', error); return [] }
+    return (data ?? []).map((p: any) => ({
+      id: p.id,
+      slug: p.slug,
+      name: p.name,
+      description: p.description ?? null,
+      vertical: p.vertical ?? null,
+      itemCount: p.hsn_pack_items?.[0]?.count ?? 0,
+    }))
+  },
+
+  listHsnPackItems: async (packId) => {
+    const { data, error } = await supabase
+      .from('hsn_pack_items')
+      .select('id, hsn_cd, name, unit, default_price, gst_rt')
+      .eq('pack_id', packId)
+      .order('sort_order')
+    if (error) { console.error('[hsn_pack_items list]', error); return [] }
+    return (data ?? []).map((i: any) => ({
+      id: i.id,
+      hsnCd: i.hsn_cd,
+      name: i.name,
+      unit: i.unit,
+      defaultPrice: Number(i.default_price),
+      gstRt: Number(i.gst_rt),
+    }))
+  },
+
+  importHsnPack: async (packId) => {
+    const companyId = get().companyId
+    if (!companyId) return { ok: false, error: 'No active company' }
+    const { data, error } = await supabase.rpc('import_hsn_pack', { p_company_id: companyId, p_pack_id: packId })
+    if (error) { console.error('[import_hsn_pack]', error); return { ok: false, error: error.message } }
+    await get().loadCompanyData(companyId)
+    return { ok: true, count: data ?? 0 }
+  },
+
+  clear: () => {
+    try { localStorage.removeItem(LAST_COMPANY_KEY) } catch { /* ignore */ }
+    set({
+      userId: null,
+      userEmail: null,
+      companyId: null,
+      company: null,
+      companies: [],
+      ready: false,
+      loading: false,
+      seller: emptySeller,
+      buyers: [],
+      products: [],
+      invoices: [],
+    })
+  },
 
   setSeller: async (s) => {
     const companyId = get().companyId
