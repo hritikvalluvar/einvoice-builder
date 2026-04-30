@@ -11,7 +11,7 @@
     "deadcode": "knip"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.104.1",
+    "@supabase/supabase-js": "^2.105.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.5"
@@ -26,11 +26,11 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.5.0",
-    "knip": "^6.6.2",
-    "postcss": "^8.4.41",
+    "knip": "^6.9.0",
+    "postcss": "^8.5.12",
     "tailwindcss": "^3.4.10",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.0",
+    "typescript-eslint": "^8.59.1",
     "vite": "^5.4.1"
   }
 }
