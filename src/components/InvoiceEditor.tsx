@@ -8,6 +8,7 @@ import { checkGstinStatus } from '../gstinLookup'
 import { suggestNextDocNo } from '../invoiceNumber'
 import { Field, inp, useGstinFetch, FetchButton, PinInput, UnitSelect } from './fields'
 import { amountInWords } from '../amountWords'
+import { generateIrn } from '../einvoiceApi'
 
 const MAX_QTY = 99_999
 const MAX_PRICE = 99_99_999   // ₹99.99 lakh per unit
@@ -201,6 +202,14 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     ewb: ewb ? { ...ewb, transDocDt: ewb.transDocDt || docDt } : undefined,
     forceTotal,
     createdAt: existing?.createdAt ?? Date.now(),
+    notes: existing?.notes,
+    // Preserve any prior IRN data — don't drop it on edit.
+    irn: existing?.irn,
+    ackNo: existing?.ackNo,
+    ackDt: existing?.ackDt,
+    signedQr: existing?.signedQr,
+    signedInvoice: existing?.signedInvoice,
+    irnCancelledAt: existing?.irnCancelledAt,
   })
 
   // ── split actual save/export logic out so dialog can call them ──
@@ -275,6 +284,55 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     if (!canSave) return
     if (hasFetchChanges) { setPendingAction('export'); return }
     await triggerReview('export')
+  }
+
+  // ── IRN generation ──
+  const [irnLoading, setIrnLoading] = useState(false)
+  const [irnError, setIrnError] = useState<string | null>(null)
+
+  const generateIrnAction = async () => {
+    if (!canSave || existing?.irn) return
+    setIrnError(null)
+    setIrnLoading(true)
+    try {
+      const inv = await resolveBuyer(buildInvoice())
+      upsertInvoice(inv)
+      const result = await generateIrn(toNicJson(seller, inv))
+      if (!result.ok) {
+        setIrnError(result.error)
+        return
+      }
+      const updated: Invoice = {
+        ...inv,
+        irn: result.data.irn,
+        ackNo: result.data.ackNo,
+        ackDt: result.data.ackDt,
+        signedQr: result.data.signedQr,
+        signedInvoice: result.data.signedInvoice,
+      }
+      upsertInvoice(updated)
+      onDone()
+    } catch (e: any) {
+      setIrnError(e?.message ?? 'Network error')
+    } finally {
+      setIrnLoading(false)
+    }
+  }
+
+  // ── PDF download (dynamic-imports the ~150KB react-pdf lib) ──
+  const [pdfLoading, setPdfLoading] = useState(false)
+
+  const downloadPdfAction = async () => {
+    if (!canSave) return
+    setPdfLoading(true)
+    try {
+      const inv = await resolveBuyer(buildInvoice())
+      upsertInvoice(inv)
+      const { downloadInvoicePdf } = await import('../invoicePdf')
+      await downloadInvoicePdf(seller, inv)
+    } finally {
+      setPdfLoading(false)
+    }
   }
 
   return (
@@ -430,6 +488,21 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           </div>
         )}
 
+        {existing?.irn && (
+          <div className="px-3 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 space-y-0.5">
+            <p className="text-[11px] font-medium text-emerald-700">e-Invoice registered with NIC</p>
+            <p className="text-xs text-emerald-900 font-mono break-all">IRN: {existing.irn}</p>
+            <p className="text-xs text-emerald-900">Ack {existing.ackNo} · {existing.ackDt}</p>
+          </div>
+        )}
+
+        {irnError && (
+          <div className="px-3 py-2.5 rounded-xl bg-red-50 border border-red-200">
+            <p className="text-[11px] font-medium text-red-700 mb-0.5">IRN generation failed</p>
+            <p className="text-xs text-red-800">{irnError}</p>
+          </div>
+        )}
+
         <div className="flex gap-2 pt-2">
           <button
             onClick={save}
@@ -444,6 +517,22 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
             className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-medium disabled:opacity-50 active:scale-95 transition"
           >
             Export JSON
+          </button>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={generateIrnAction}
+            disabled={!canSave || irnLoading || !!existing?.irn}
+            className="flex-1 py-3 rounded-xl bg-indigo-600 text-white font-medium disabled:opacity-50 active:scale-95 transition"
+          >
+            {existing?.irn ? 'IRN issued' : irnLoading ? 'Generating IRN…' : 'Generate IRN'}
+          </button>
+          <button
+            onClick={downloadPdfAction}
+            disabled={!canSave || pdfLoading}
+            className="flex-1 py-3 rounded-xl bg-slate-700 text-white font-medium disabled:opacity-50 active:scale-95 transition"
+          >
+            {pdfLoading ? 'Building PDF…' : 'Download PDF'}
           </button>
         </div>
       </div>
