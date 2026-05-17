@@ -6,7 +6,7 @@
 
 import { supabase } from './supabase'
 
-export type IrnData = {
+type IrnData = {
   irn: string
   ackNo: string
   ackDt: string
@@ -18,7 +18,7 @@ export type IrnData = {
   ewbValidTill: string | null
 }
 
-export type GenerateIrnResult =
+type GenerateIrnResult =
   | { ok: true; data: IrnData }
   | { ok: false; error: string }
 

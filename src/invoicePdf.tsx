@@ -133,7 +133,7 @@ function summariseByHsn(lines: ReturnType<typeof computeLines>): HsnSummary[] {
   return Array.from(map.values())
 }
 
-export function InvoicePdf({ seller, invoice, qrDataUrl }: { seller: Seller; invoice: Invoice; qrDataUrl?: string | null }) {
+function InvoicePdf({ seller, invoice, qrDataUrl }: { seller: Seller; invoice: Invoice; qrDataUrl?: string | null }) {
   const billTo = invoice.billTo
   const isIntra = seller.stcd === billTo.pos
   const lines = computeLines(invoice.items, isIntra)
