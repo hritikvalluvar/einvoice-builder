@@ -1,6 +1,10 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "ignore": [
-    "supabase/functions/**"
+    "supabase/functions/**",
+    "src/pdf/templates/08-pharma-batch.tsx",
+    "src/pdf/templates/09-textile-lot.tsx",
+    "src/pdf/templates/10-construction-ra-bill.tsx",
+    "src/pdf/templates/11-export-invoice.tsx"
   ]
 }
