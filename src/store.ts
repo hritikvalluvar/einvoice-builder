@@ -460,6 +460,7 @@ function invoiceToDb(i: Invoice) {
     signed_qr: i.signedQr ?? null,
     signed_invoice: i.signedInvoice ?? null,
     irn_cancelled_at: i.irnCancelledAt ?? null,
+    template_id: i.templateId ?? null,
   }
 }
 
@@ -482,6 +483,7 @@ function dbToInvoice(r: any): Invoice {
     signedQr: r.signed_qr ?? undefined,
     signedInvoice: r.signed_invoice ?? undefined,
     irnCancelledAt: r.irn_cancelled_at ?? undefined,
+    templateId: r.template_id ?? undefined,
   }
 }
 
