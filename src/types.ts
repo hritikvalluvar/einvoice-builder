@@ -105,4 +105,8 @@ export type Invoice = {
   signedQr?: string
   signedInvoice?: string
   irnCancelledAt?: string
+  // PDF template chosen for this invoice. Null = use the company default
+  // at render time. Locked once the user has downloaded with a specific
+  // template, so re-downloads stay visually consistent.
+  templateId?: string
 }

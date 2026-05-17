@@ -109,6 +109,8 @@ create table invoices (
   signed_qr text,
   signed_invoice text,
   irn_cancelled_at timestamptz,
+  -- PDF template chosen at download time. NULL = company default (localStorage).
+  template_id text,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );

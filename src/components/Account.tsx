@@ -4,14 +4,19 @@ import { supabase } from '../supabase'
 import type { Seller } from '../types'
 import { validateGstin, validatePin, validatePhone, validateEmail, requireText, validateStcd, stcdName } from '../validators'
 import { Field, inp, useGstinFetch, FetchButton, PinInput } from './fields'
+import { TemplatePicker } from './TemplatePicker'
+import { getDefaultTemplate, setDefaultTemplate } from '../pdf/defaultTemplate'
+import { templateById } from '../pdf/registry'
 
 export function Account() {
   const { userEmail, company, seller, setSeller, listMembers, removeMember } = useStore()
+  const companyId = useStore((st) => st.companyId)
   const [s, setS] = useState<Seller>(seller)
   const [members, setMembers] = useState<Member[]>([])
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [savingMsg, setSavingMsg] = useState('')
+  const [defaultTpl, setDefaultTpl] = useState(() => getDefaultTemplate(companyId))
 
   const set = <K extends keyof Seller>(k: K, v: Seller[K]) => setS((x) => ({ ...x, [k]: v }))
 
@@ -114,6 +119,24 @@ export function Account() {
               {members.length === 0 && <li className="text-sm text-slate-500 py-2">No members.</li>}
             </ul>
           )}
+        </Card>
+
+        <Card title="Default invoice template">
+          <p className="text-xs text-slate-500 mb-2">
+            Used for all new invoices in this company. You can override per-invoice in the editor.
+          </p>
+          <TemplatePicker
+            value={defaultTpl}
+            onChange={(id) => {
+              setDefaultTpl(id)
+              if (companyId) setDefaultTemplate(companyId, id)
+            }}
+            className="w-full"
+            hideUseDefault
+          />
+          <p className="text-xs text-slate-500 mt-2">
+            Currently: <span className="font-medium text-slate-700">{templateById(defaultTpl).name}</span> — {templateById(defaultTpl).vertical}
+          </p>
         </Card>
 
         <Card title="Seller details (for invoices)">

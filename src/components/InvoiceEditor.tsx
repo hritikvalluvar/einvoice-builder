@@ -9,6 +9,10 @@ import { suggestNextDocNo } from '../invoiceNumber'
 import { Field, inp, useGstinFetch, FetchButton, PinInput, UnitSelect } from './fields'
 import { amountInWords } from '../amountWords'
 import { generateIrn } from '../einvoiceApi'
+import { TemplatePicker } from './TemplatePicker'
+import { getDefaultTemplate } from '../pdf/defaultTemplate'
+import { templateById } from '../pdf/registry'
+import type { CopyMode } from '../pdf'
 
 const MAX_QTY = 99_999
 const MAX_PRICE = 99_99_999   // ₹99.99 lakh per unit
@@ -22,8 +26,18 @@ type Props = {
 
 export function InvoiceEditor({ invoiceId, onDone }: Props) {
   const { seller, buyers, products, invoices, upsertBuyer, upsertProduct, upsertInvoice } = useStore()
+  const companyId = useStore((st) => st.companyId)
 
   const existing = invoiceId ? invoices.find((i) => i.id === invoiceId) : undefined
+
+  // Template choice: existing.templateId if the invoice was already rendered
+  // with a specific template, otherwise the company default. Per-invoice
+  // override is saved back onto the invoice when the user downloads a PDF.
+  const [templateId, setTemplateId] = useState<string>(
+    existing?.templateId ?? getDefaultTemplate(companyId)
+  )
+  const [copyMode, setCopyMode] = useState<CopyMode>('single')
+  const template = templateById(templateId)
 
   const today = useMemo(() => {
     const d = new Date()
@@ -210,6 +224,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     signedQr: existing?.signedQr,
     signedInvoice: existing?.signedInvoice,
     irnCancelledAt: existing?.irnCancelledAt,
+    templateId: existing?.templateId,
   })
 
   // ── split actual save/export logic out so dialog can call them ──
@@ -334,10 +349,12 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     if (!canSave) return
     setPdfLoading(true)
     try {
-      const inv = await resolveBuyer(buildInvoice())
+      // Snapshot the template choice onto the invoice so future re-downloads
+      // stay consistent regardless of the company default changing.
+      const inv = await resolveBuyer({ ...buildInvoice(), templateId })
       await upsertInvoice(inv)
-      const { downloadInvoicePdf } = await import('../invoicePdf')
-      await downloadInvoicePdf(seller, inv)
+      const { downloadPdf } = await import('../pdf')
+      await downloadPdf(templateId, seller, inv, copyMode)
     } catch {
       // DB save failed; banner shown. Skip the PDF render.
     } finally {
@@ -552,6 +569,31 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
             {pdfLoading ? 'Building PDF…' : 'Download PDF'}
           </button>
         </div>
+        <section className="bg-white rounded-xl p-3 shadow-sm space-y-2">
+          <div className="text-xs font-medium text-slate-500">PDF template</div>
+          <TemplatePicker
+            value={templateId}
+            onChange={setTemplateId}
+            className="w-full"
+            hideUseDefault
+          />
+          <div className="text-xs text-slate-500">{template.vertical}</div>
+          {template.supportsMultiCopy ? (
+            <div className="flex items-center gap-2 pt-1">
+              <label className="text-xs text-slate-500">Copies:</label>
+              <select
+                value={copyMode}
+                onChange={(e) => setCopyMode(e.target.value as CopyMode)}
+                className="text-sm border border-slate-300 rounded px-2 py-1"
+              >
+                <option value="single">Single</option>
+                <option value="all-copies">Original + Duplicate + Triplicate</option>
+              </select>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400 pt-1">Multi-copy not applicable for this template</div>
+          )}
+        </section>
       </div>
       {/* ── confirmation dialog ── */}
       {pendingAction && (
