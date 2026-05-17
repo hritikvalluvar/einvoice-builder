@@ -30,10 +30,13 @@ export function ClientList() {
     })
   const cancelSelect = () => { setSelectMode(false); setSelected(new Set()) }
   const selectAll = () => setSelected(new Set(filtered.map((b) => b.id)))
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (selected.size === 0) return
     if (!confirm(`Delete ${selected.size} client${selected.size === 1 ? '' : 's'}?`)) return
-    for (const id of selected) deleteBuyer(id)
+    // Sequential await so we stop on first failure (rollback already inside the store).
+    try {
+      for (const id of selected) await deleteBuyer(id)
+    } catch { /* banner shown by store */ }
     cancelSelect()
   }
 
@@ -41,7 +44,12 @@ export function ClientList() {
     return (
       <BuyerForm
         buyer={editing}
-        onSave={(b) => { upsertBuyer(b); setEditing(null) }}
+        onSave={async (b) => {
+          try {
+            await upsertBuyer(b)
+            setEditing(null)
+          } catch { /* banner shown; stay on form so the user can retry */ }
+        }}
         onCancel={() => setEditing(null)}
       />
     )
@@ -110,7 +118,10 @@ export function ClientList() {
                 </button>
                 {!selectMode && (
                   <button
-                    onClick={() => { if (confirm('Delete client?')) deleteBuyer(b.id) }}
+                    onClick={async () => {
+                      if (!confirm('Delete client?')) return
+                      try { await deleteBuyer(b.id) } catch { /* banner shown */ }
+                    }}
                     className="text-slate-400 px-2 text-lg"
                   >×</button>
                 )}

@@ -241,23 +241,31 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
   }
 
   const doSave = async () => {
-    const inv = await resolveBuyer(buildInvoice())
-    upsertInvoice(inv)
-    onDone()
+    try {
+      const inv = await resolveBuyer(buildInvoice())
+      await upsertInvoice(inv)
+      onDone()
+    } catch {
+      // store.lastError is set; ErrorBanner shows. Don't navigate away on failure.
+    }
   }
 
   const doExport = async () => {
-    const inv = await resolveBuyer(buildInvoice())
-    upsertInvoice(inv)
-    const payload = [toNicJson(seller, inv)]
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `invoice-${inv.docNo}.json`
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
-    onDone()
+    try {
+      const inv = await resolveBuyer(buildInvoice())
+      await upsertInvoice(inv)
+      const payload = [toNicJson(seller, inv)]
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `invoice-${inv.docNo}.json`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+      onDone()
+    } catch {
+      // DB save failed; banner shown. Don't trigger the JSON download.
+    }
   }
 
   // ── GSTIN status check + review gate (both save and export paths) ──
@@ -296,7 +304,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setIrnLoading(true)
     try {
       const inv = await resolveBuyer(buildInvoice())
-      upsertInvoice(inv)
+      await upsertInvoice(inv)
       const result = await generateIrn(toNicJson(seller, inv))
       if (!result.ok) {
         setIrnError(result.error)
@@ -310,7 +318,7 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
         signedQr: result.data.signedQr,
         signedInvoice: result.data.signedInvoice,
       }
-      upsertInvoice(updated)
+      await upsertInvoice(updated)
       onDone()
     } catch (e: any) {
       setIrnError(e?.message ?? 'Network error')
@@ -327,9 +335,11 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
     setPdfLoading(true)
     try {
       const inv = await resolveBuyer(buildInvoice())
-      upsertInvoice(inv)
+      await upsertInvoice(inv)
       const { downloadInvoicePdf } = await import('../invoicePdf')
       await downloadInvoicePdf(seller, inv)
+    } catch {
+      // DB save failed; banner shown. Skip the PDF render.
     } finally {
       setPdfLoading(false)
     }
@@ -447,7 +457,14 @@ export function InvoiceEditor({ invoiceId, onDone }: Props) {
           products={products}
           onAddProduct={addItemFromProduct}
           onAddBlank={addBlankItem}
-          onCreateProduct={(p) => { upsertProduct(p); addItemFromProduct(p) }}
+          onCreateProduct={async (p) => {
+            try {
+              await upsertProduct(p)
+              addItemFromProduct(p)
+            } catch {
+              // banner shown; don't add the unsaved product to the invoice line
+            }
+          }}
           onUpdate={updateItem}
           onRemove={removeItem}
           lines={lines}

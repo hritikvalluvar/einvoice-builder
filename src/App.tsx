@@ -7,6 +7,7 @@ import { Account } from './components/Account'
 import { Login } from './components/Login'
 import { Onboarding } from './components/Onboarding'
 import { CompanySwitcher } from './components/CompanySwitcher'
+import { ErrorBanner } from './components/ErrorBanner'
 import { useStore } from './store'
 import { supabase } from './supabase'
 
@@ -55,6 +56,7 @@ export default function App() {
   if (editingId) {
     return (
       <div className="h-full max-w-md mx-auto bg-white shadow-xl flex flex-col">
+        <ErrorBanner />
         <CompanySwitcher />
         <div className="flex-1 overflow-hidden">
           <InvoiceEditor invoiceId={editingId} onDone={() => setEditingId(undefined)} />
@@ -65,6 +67,7 @@ export default function App() {
 
   return (
     <div className="h-full max-w-md mx-auto bg-white shadow-xl flex flex-col">
+      <ErrorBanner />
       <CompanySwitcher />
       <div className="flex-1 overflow-hidden">
         {tab === 'create' && (
