@@ -31,10 +31,12 @@ export function ProductList() {
     })
   const cancelSelect = () => { setSelectMode(false); setSelected(new Set()) }
   const selectAll = () => setSelected(new Set(filtered.map((p) => p.id)))
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (selected.size === 0) return
     if (!confirm(`Delete ${selected.size} product${selected.size === 1 ? '' : 's'}?`)) return
-    for (const id of selected) deleteProduct(id)
+    try {
+      for (const id of selected) await deleteProduct(id)
+    } catch { /* banner shown by store */ }
     cancelSelect()
   }
 
@@ -42,7 +44,12 @@ export function ProductList() {
     return (
       <ProductForm
         product={editing}
-        onSave={(p) => { upsertProduct(p); setEditing(null) }}
+        onSave={async (p) => {
+          try {
+            await upsertProduct(p)
+            setEditing(null)
+          } catch { /* banner shown; stay on form */ }
+        }}
         onCancel={() => setEditing(null)}
       />
     )
@@ -118,7 +125,10 @@ export function ProductList() {
                 </button>
                 {!selectMode && (
                   <button
-                    onClick={() => { if (confirm('Delete product?')) deleteProduct(p.id) }}
+                    onClick={async () => {
+                      if (!confirm('Delete product?')) return
+                      try { await deleteProduct(p.id) } catch { /* banner shown */ }
+                    }}
                     className="text-slate-400 px-2 text-lg"
                   >×</button>
                 )}

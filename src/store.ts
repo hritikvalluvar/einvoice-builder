@@ -39,8 +39,13 @@ type State = {
   buyers: Buyer[]
   products: Product[]
   invoices: Invoice[]
+  // User-visible error from the most recent mutation. ErrorBanner reads this.
+  // Mutations throw on failure (so callers can stop their flow) AND set this
+  // so the banner shows even if the caller forgets to catch.
+  lastError: string | null
 
   setUserEmail: (email: string | null) => void
+  clearLastError: () => void
   bootstrap: (userId: string) => Promise<void>
   loadCompanyData: (companyId: string) => Promise<void>
   createCompany: (name: string) => Promise<{ ok: boolean; error?: string; companyId?: string }>
@@ -85,8 +90,10 @@ export const useStore = create<State>()((set, get) => ({
   buyers: [],
   products: [],
   invoices: [],
+  lastError: null,
 
   setUserEmail: (email) => set({ userEmail: email }),
+  clearLastError: () => set({ lastError: null }),
 
   bootstrap: async (userId) => {
     set({ loading: true, userId })
@@ -261,7 +268,11 @@ export const useStore = create<State>()((set, get) => ({
     if (!companyId) return
     set({ seller: s })
     const { error } = await supabase.from('sellers').upsert({ ...sellerToDb(s), company_id: companyId })
-    if (error) console.error('[seller upsert]', error)
+    if (error) {
+      console.error('[seller upsert]', error)
+      set({ lastError: `Couldn't save seller profile: ${error.message}` })
+      throw error
+    }
   },
 
   upsertBuyer: async (b) => {
@@ -273,13 +284,22 @@ export const useStore = create<State>()((set, get) => ({
     if (idx >= 0) next[idx] = b; else next.unshift(b)
     set({ buyers: next })
     const { error } = await supabase.from('buyers').upsert({ ...buyerToDb(b), company_id: companyId, id: b.id })
-    if (error) console.error('[buyer upsert]', error)
+    if (error) {
+      console.error('[buyer upsert]', error)
+      set({ lastError: `Couldn't save client "${b.lglNm || b.gstin}": ${error.message}` })
+      throw error
+    }
   },
 
   deleteBuyer: async (id) => {
-    set({ buyers: get().buyers.filter((b) => b.id !== id) })
+    const prev = get().buyers
+    set({ buyers: prev.filter((b) => b.id !== id) })
     const { error } = await supabase.from('buyers').delete().eq('id', id)
-    if (error) console.error('[buyer delete]', error)
+    if (error) {
+      console.error('[buyer delete]', error)
+      set({ buyers: prev, lastError: `Couldn't delete client: ${error.message}` })
+      throw error
+    }
   },
 
   upsertProduct: async (p) => {
@@ -291,13 +311,22 @@ export const useStore = create<State>()((set, get) => ({
     if (idx >= 0) next[idx] = p; else next.unshift(p)
     set({ products: next })
     const { error } = await supabase.from('products').upsert({ ...productToDb(p), company_id: companyId, id: p.id })
-    if (error) console.error('[product upsert]', error)
+    if (error) {
+      console.error('[product upsert]', error)
+      set({ lastError: `Couldn't save product "${p.prdDesc}": ${error.message}` })
+      throw error
+    }
   },
 
   deleteProduct: async (id) => {
-    set({ products: get().products.filter((p) => p.id !== id) })
+    const prev = get().products
+    set({ products: prev.filter((p) => p.id !== id) })
     const { error } = await supabase.from('products').delete().eq('id', id)
-    if (error) console.error('[product delete]', error)
+    if (error) {
+      console.error('[product delete]', error)
+      set({ products: prev, lastError: `Couldn't delete product: ${error.message}` })
+      throw error
+    }
   },
 
   upsertInvoice: async (i) => {
@@ -309,13 +338,22 @@ export const useStore = create<State>()((set, get) => ({
     if (idx >= 0) next[idx] = i; else next.unshift(i)
     set({ invoices: next })
     const { error } = await supabase.from('invoices').upsert({ ...invoiceToDb(i), company_id: companyId, id: i.id })
-    if (error) console.error('[invoice upsert]', error)
+    if (error) {
+      console.error('[invoice upsert]', error)
+      set({ lastError: `Couldn't save invoice ${i.docNo}: ${error.message}` })
+      throw error
+    }
   },
 
   deleteInvoice: async (id) => {
-    set({ invoices: get().invoices.filter((i) => i.id !== id) })
+    const prev = get().invoices
+    set({ invoices: prev.filter((i) => i.id !== id) })
     const { error } = await supabase.from('invoices').delete().eq('id', id)
-    if (error) console.error('[invoice delete]', error)
+    if (error) {
+      console.error('[invoice delete]', error)
+      set({ invoices: prev, lastError: `Couldn't delete invoice: ${error.message}` })
+      throw error
+    }
   },
 }))
 

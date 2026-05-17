@@ -36,10 +36,12 @@ export function OrderHistory({ onEdit }: Props) {
     cancelSelect()
   }
 
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (selected.size === 0) return
     if (!confirm(`Delete ${selected.size} order${selected.size === 1 ? '' : 's'}?`)) return
-    for (const id of selected) deleteInvoice(id)
+    try {
+      for (const id of selected) await deleteInvoice(id)
+    } catch { /* banner shown by store */ }
     cancelSelect()
   }
 
@@ -99,7 +101,10 @@ export function OrderHistory({ onEdit }: Props) {
                   </button>
                   {!selectMode && (
                     <button
-                      onClick={() => { if (confirm('Delete order?')) deleteInvoice(inv.id) }}
+                      onClick={async () => {
+                        if (!confirm('Delete order?')) return
+                        try { await deleteInvoice(inv.id) } catch { /* banner shown */ }
+                      }}
                       className="text-slate-400 px-2 text-lg"
                       aria-label="Delete"
                     >×</button>
