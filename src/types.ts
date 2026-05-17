@@ -98,4 +98,11 @@ export type Invoice = {
   forceTotal?: number
   createdAt: number
   notes?: string
+  // NIC e-invoice fields, populated after successful IRN generation
+  irn?: string
+  ackNo?: string
+  ackDt?: string
+  signedQr?: string
+  signedInvoice?: string
+  irnCancelledAt?: string
 }

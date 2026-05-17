@@ -231,10 +231,131 @@ function devGstinLookup(env: Record<string, string>): PluginOption {
   }
 }
 
+// Dev-only middleware that emulates the `generate-irn` Supabase edge function.
+// Submits a NIC-schema invoice JSON to Sandbox and returns IRN/AckNo/SignedQRCode.
+// Sandbox creds stay server-side (Node), never shipped to the browser.
+function devIrnGenerate(env: Record<string, string>): PluginOption {
+  const API_BASE = env.SANDBOX_API_BASE || 'https://api.sandbox.co.in'
+  const API_KEY = env.SANDBOX_API_KEY
+  const API_SECRET = env.SANDBOX_API_SECRET
+  const SB_URL = env.VITE_SUPABASE_URL
+  const SB_ANON = env.VITE_SUPABASE_ANON_KEY
+
+  let tokenCache: { token: string; exp: number } | null = null
+
+  async function getSandboxToken(): Promise<string> {
+    if (tokenCache && tokenCache.exp > Date.now() + 3600_000) return tokenCache.token
+    const r = await fetch(`${API_BASE}/authenticate`, {
+      method: 'POST',
+      headers: { 'x-api-key': API_KEY, 'x-api-secret': API_SECRET },
+    })
+    if (!r.ok) throw new Error(`Sandbox auth failed (${r.status})`)
+    const j = await r.json()
+    const token = j?.data?.access_token ?? j?.access_token
+    if (!token) throw new Error('Sandbox auth returned no token')
+    tokenCache = { token, exp: Date.now() + 23 * 3600_000 }
+    return token
+  }
+
+  function sendJson(res: ServerResponse, status: number, body: unknown) {
+    res.statusCode = status
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type')
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify(body))
+  }
+
+  async function readJson(req: IncomingMessage): Promise<any> {
+    const chunks: Buffer[] = []
+    for await (const c of req) chunks.push(c as Buffer)
+    const raw = Buffer.concat(chunks).toString('utf8')
+    return raw ? JSON.parse(raw) : {}
+  }
+
+  return {
+    name: 'dev-api-generate-irn',
+    configureServer(server) {
+      if (!API_KEY || !API_SECRET) {
+        server.config.logger.warn('[dev-api] /api/generate-irn will 500: SANDBOX_API_KEY/SECRET not set')
+      } else {
+        server.config.logger.info('[dev-api] /api/generate-irn active (Sandbox)')
+      }
+
+      server.middlewares.use('/api/generate-irn', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.setHeader('Access-Control-Allow-Origin', '*')
+          res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type')
+          res.statusCode = 204
+          res.end()
+          return
+        }
+        if (req.method !== 'POST') return next()
+
+        const authHeader = (req.headers['authorization'] as string) ?? ''
+        if (!authHeader) return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+        try {
+          const sb = createClient(SB_URL, SB_ANON, { global: { headers: { Authorization: authHeader } } })
+          const { data: { user } } = await sb.auth.getUser()
+          if (!user) return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+        } catch {
+          return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+        }
+
+        let body: any = {}
+        try { body = await readJson(req) } catch { return sendJson(res, 400, { ok: false, error: 'Bad JSON' }) }
+        const nicJson = body?.nicJson
+        if (!nicJson || typeof nicJson !== 'object') {
+          return sendJson(res, 400, { ok: false, error: 'Missing nicJson body' })
+        }
+
+        try {
+          const token = await getSandboxToken()
+          const r = await fetch(`${API_BASE}/gst/compliance/e-invoice/tax-payer/invoice`, {
+            method: 'POST',
+            headers: {
+              'Authorization': token,
+              'x-api-key': API_KEY,
+              'x-api-version': '1.0.0',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(nicJson),
+          })
+          const j = await r.json()
+          const sandboxStatus = j?.data?.Status ?? j?.code
+          const raw = j?.data?.Data
+          if (!raw || sandboxStatus !== 1) {
+            const msg = j?.message
+              || j?.data?.ErrorDetails?.[0]?.ErrorMessage
+              || j?.data?.InfoDtls?.[0]?.Desc
+              || `Submission failed (code ${j?.code ?? '?'})`
+            return sendJson(res, 422, { ok: false, error: msg, raw: j })
+          }
+          sendJson(res, 200, {
+            ok: true,
+            data: {
+              irn: raw.Irn,
+              ackNo: String(raw.AckNo ?? ''),
+              ackDt: raw.AckDt,
+              signedInvoice: raw.SignedInvoice,
+              signedQr: raw.SignedQRCode,
+              status: raw.Status,
+              ewbNo: raw.EwbNo ?? null,
+              ewbDt: raw.EwbDt ?? null,
+              ewbValidTill: raw.EwbValidTill ?? null,
+            },
+          })
+        } catch (e: any) {
+          sendJson(res, 502, { ok: false, error: e?.message ?? String(e) })
+        }
+      })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
-    plugins: [react(), devGstinLookup(env)],
+    plugins: [react(), devGstinLookup(env), devIrnGenerate(env)],
     server: {
       host: true,
       port: 5173,

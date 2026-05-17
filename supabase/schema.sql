@@ -102,6 +102,13 @@ create table invoices (
   ewb jsonb,
   force_total numeric,
   notes text,
+  -- NIC e-invoice fields (populated after successful IRN generation)
+  irn text,
+  ack_no text,
+  ack_dt text,
+  signed_qr text,
+  signed_invoice text,
+  irn_cancelled_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );

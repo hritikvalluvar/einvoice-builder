@@ -416,6 +416,12 @@ function invoiceToDb(i: Invoice) {
     ewb: i.ewb ?? null,
     force_total: i.forceTotal ?? null,
     notes: i.notes ?? null,
+    irn: i.irn ?? null,
+    ack_no: i.ackNo ?? null,
+    ack_dt: i.ackDt ?? null,
+    signed_qr: i.signedQr ?? null,
+    signed_invoice: i.signedInvoice ?? null,
+    irn_cancelled_at: i.irnCancelledAt ?? null,
   }
 }
 
@@ -432,6 +438,12 @@ function dbToInvoice(r: any): Invoice {
     forceTotal: r.force_total != null ? Number(r.force_total) : undefined,
     createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
     notes: r.notes ?? undefined,
+    irn: r.irn ?? undefined,
+    ackNo: r.ack_no ?? undefined,
+    ackDt: r.ack_dt ?? undefined,
+    signedQr: r.signed_qr ?? undefined,
+    signedInvoice: r.signed_invoice ?? undefined,
+    irnCancelledAt: r.irn_cancelled_at ?? undefined,
   }
 }
 
